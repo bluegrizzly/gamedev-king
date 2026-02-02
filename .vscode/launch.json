@@ -9,7 +9,7 @@
             "cwd": "${workspaceFolder}\\api",
             "type": "debugpy",
             "request": "launch",
-            "python": "d:\\AndyFire\\GitHub\\GameDevKing\\api\\.venv\\Scripts\\python.exe",
+            "python": "d:\\AndyFire\\GitHub\\gamedev-king\\api\\.venv\\Scripts\\python.exe",
             "module": "uvicorn",
             "args": [
                 "main:app",

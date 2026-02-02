@@ -9,10 +9,43 @@ type ChatMessage = {
   content: string;
 };
 
+type AgentInfo = {
+  id: string;
+  name: string;
+  role: string;
+  image: string;
+};
+
 type SseEvent = {
   event: string;
   data: string;
 };
+
+const buildAvatar = (label: string, color: string) => {
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
+      <rect width="64" height="64" rx="12" fill="${color}" />
+      <text x="50%" y="50%" text-anchor="middle" dy=".32em"
+        font-family="Arial, sans-serif" font-size="24" fill="#ffffff">${label}</text>
+    </svg>
+  `;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+};
+
+const AGENTS: AgentInfo[] = [
+  {
+    id: "creative_director",
+    name: "Creative Director",
+    role: "Vision",
+    image: buildAvatar("CD", "#3b82f6"),
+  },
+  {
+    id: "art_director",
+    name: "Art Director",
+    role: "Visuals",
+    image: buildAvatar("AD", "#f97316"),
+  },
+];
 
 function parseSseLines(buffer: string): { events: SseEvent[]; rest: string } {
   const lines = buffer.split("\n");
@@ -52,28 +85,40 @@ function parseSseLines(buffer: string): { events: SseEvent[]; rest: string } {
 }
 
 export default function HomePage() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [agentId, setAgentId] = useState<string>(AGENTS[0]?.id ?? "creative_director");
+  const [historyByAgent, setHistoryByAgent] = useState<Record<string, ChatMessage[]>>(
+    () => Object.fromEntries(AGENTS.map((agent) => [agent.id, []])),
+  );
   const [input, setInput] = useState("");
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const messages = historyByAgent[agentId] ?? [];
+  const activeAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
 
   useEffect(() => {
     const el = transcriptRef.current;
     if (el) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, isStreaming]);
+  }, [messages, isStreaming, agentId]);
+
+  const updateHistory = (targetAgent: string, updater: (prev: ChatMessage[]) => ChatMessage[]) => {
+    setHistoryByAgent((prev) => ({
+      ...prev,
+      [targetAgent]: updater(prev[targetAgent] ?? []),
+    }));
+  };
 
   const sendMessage = async () => {
     const trimmed = input.trim();
     if (!trimmed || isStreaming) return;
 
+    const targetAgent = agentId;
     const userMessage: ChatMessage = { role: "user", content: trimmed };
     const assistantMessage: ChatMessage = { role: "assistant", content: "" };
-    const outgoing = [...messages, userMessage];
 
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    updateHistory(targetAgent, (prev) => [...prev, userMessage, assistantMessage]);
     setInput("");
     setIsStreaming(true);
     setStatus("Streaming...");
@@ -82,7 +127,7 @@ export default function HomePage() {
       const response = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: outgoing }),
+        body: JSON.stringify({ agent: targetAgent, message: trimmed }),
       });
 
       if (!response.ok || !response.body) {
@@ -104,7 +149,7 @@ export default function HomePage() {
 
           for (const evt of parsed.events) {
             if (evt.event === "token") {
-              setMessages((prev) => {
+              updateHistory(targetAgent, (prev) => {
                 const next = [...prev];
                 const last = next[next.length - 1];
                 if (last && last.role === "assistant") {
@@ -140,6 +185,13 @@ export default function HomePage() {
     }
   };
 
+  const getRoleLabel = (role: Role) => {
+    if (role === "assistant") {
+      return activeAgent?.name ?? "Assistant";
+    }
+    return role;
+  };
+
   return (
     <main>
       <div className="chat-shell">
@@ -153,7 +205,7 @@ export default function HomePage() {
           )}
           {messages.map((msg, idx) => (
             <div className="message" key={idx}>
-              <div className="role">{msg.role}</div>
+              <div className="role">{getRoleLabel(msg.role)}</div>
               <div className="bubble">{msg.content}</div>
             </div>
           ))}
@@ -171,6 +223,23 @@ export default function HomePage() {
         </div>
         <div className="status">
           {status ? status : isStreaming ? "Assistant is typing..." : ""}
+        </div>
+        <div className="agent-list">
+          {AGENTS.map((agent) => (
+            <button
+              key={agent.id}
+              type="button"
+              className={`agent-card ${agentId === agent.id ? "active" : ""}`}
+              onClick={() => setAgentId(agent.id)}
+              disabled={isStreaming && agentId === agent.id}
+            >
+              <img className="agent-avatar" src={agent.image} alt={agent.name} />
+              <div className="agent-meta">
+                <div className="agent-name">{agent.name}</div>
+                <div className="agent-role">{agent.role}</div>
+              </div>
+            </button>
+          ))}
         </div>
       </div>
     </main>
