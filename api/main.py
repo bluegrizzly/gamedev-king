@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, List, Optional
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -11,7 +11,11 @@ from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
-from rag import rag_router, retrieve_chunks
+from llm_tools import get_tools
+from pdf_export import run_export_pdf_tool
+from pdf_routes import pdf_router
+from rag import retrieve_chunks
+from rag_routes import rag_router
 
 load_dotenv()
 
@@ -95,6 +99,7 @@ def health() -> dict:
     return {"ok": True}
 
 app.include_router(rag_router)
+app.include_router(pdf_router)
 
 
 @app.post("/chat/stream")
@@ -110,7 +115,6 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
 
     async def generator() -> AsyncGenerator[bytes, None]:
         try:
-            used_responses = False
             agent_id = normalize_agent_id(body.agent)
             persona_text = load_persona_text(agent_id)
             persona_description = load_persona_description_prompt(agent_id)
@@ -179,6 +183,11 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 "When using context, prefer citing it. If the answer is not supported by context, "
                 "say so and propose what to add to the KB."
             )
+            tool_instruction = (
+                "If the user explicitly requests saving or exporting to PDF, produce the full document first, "
+                "then call export_pdf with the final content and a sensible title. "
+                "If the user did NOT request saving, do NOT call the tool."
+            )
 
             use_history = body.message is not None and body.message.strip() != ""
             if use_history:
@@ -188,53 +197,140 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             else:
                 history = None
                 base_messages = [m.model_dump() for m in body.messages]
-            system_messages: list[dict] = [{"role": "system", "content": rag_system_prompt}]
+            system_messages: list[dict] = [
+                {"role": "system", "content": rag_system_prompt},
+                {"role": "system", "content": tool_instruction},
+            ]
             if persona_prompt:
                 system_messages.append({"role": "system", "content": persona_prompt})
             if context_block:
                 system_messages.append({"role": "system", "content": context_block})
-            input_messages = [*system_messages, *base_messages]
+            input_messages: list[dict[str, Any]] = [*system_messages, *base_messages]
 
-            assistant_chunks: list[str] = []
-            if hasattr(client, "responses"):
-                try:
-                    stream = client.responses.create(
-                        model=body.model or "gpt-5-mini",
-                        input=input_messages,
-                        stream=True,
-                    )
-                    used_responses = True
-                    for event in stream:
-                        event_type = getattr(event, "type", "")
-                        if event_type == "response.output_text.delta":
-                            delta = getattr(event, "delta", "")
-                            if delta:
-                                if history is not None:
-                                    assistant_chunks.append(delta)
-                                yield sse_event("token", delta)
-                        elif event_type == "response.completed":
-                            break
-                except Exception:
-                    used_responses = False
+            max_tool_iterations = 2
+            tool_iterations = 0
+            pending_messages = list(input_messages)
 
-            if not used_responses:
+            while tool_iterations < max_tool_iterations:
+                assistant_chunks: list[str] = []
+                tool_calls: list[dict[str, Any]] = []
+
                 stream = client.chat.completions.create(
                     model=body.model or "gpt-5-mini",
-                    messages=input_messages,
+                    messages=pending_messages,
+                    tools=get_tools(),
+                    tool_choice="auto",
                     stream=True,
                 )
+                tool_call_map: dict[int, dict[str, Any]] = {}
                 for chunk in stream:
                     choice = chunk.choices[0]
-                    delta = getattr(choice.delta, "content", None)
-                    if delta:
+                    delta = choice.delta
+                    delta_text = getattr(delta, "content", None)
+                    if delta_text:
                         if history is not None:
-                            assistant_chunks.append(delta)
-                        yield sse_event("token", delta)
+                            assistant_chunks.append(delta_text)
+                        yield sse_event("token", delta_text)
+                    delta_tool_calls = getattr(delta, "tool_calls", None)
+                    if delta_tool_calls:
+                        for tool_call in delta_tool_calls:
+                            index = tool_call.index
+                            entry = tool_call_map.setdefault(
+                                index,
+                                {
+                                    "id": tool_call.id,
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                },
+                            )
+                            if tool_call.id and not entry.get("id"):
+                                entry["id"] = tool_call.id
+                            if tool_call.function and tool_call.function.name:
+                                entry["function"]["name"] = tool_call.function.name
+                            if tool_call.function and tool_call.function.arguments:
+                                entry["function"]["arguments"] += tool_call.function.arguments
+                tool_calls = [tool_call_map[i] for i in sorted(tool_call_map.keys())]
 
-            if history is not None:
                 assistant_text = "".join(assistant_chunks).strip()
-                if assistant_text:
+                if history is not None and assistant_text:
                     history.append(ChatMessage(role="assistant", content=assistant_text))
+
+                if not tool_calls:
+                    break
+
+                tool_iterations += 1
+                # Only allow export_pdf tool calls.
+                allowed_tool_calls = [call for call in tool_calls if call.get("function", {}).get("name") == "export_pdf"]
+                if not allowed_tool_calls:
+                    first_call = tool_calls[0]
+                    tool_id = first_call.get("id") or "unknown_tool"
+                    tool_name = first_call.get("function", {}).get("name", "unknown_tool")
+                    error_payload = {"error": f"Tool '{tool_name}' is not allowed."}
+                    yield sse_event("error", error_payload["error"])
+                    pending_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": assistant_text,
+                            "tool_calls": [
+                                {
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_name,
+                                        "arguments": first_call.get("function", {}).get("arguments", "{}"),
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                    pending_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": tool_name,
+                            "content": json.dumps(error_payload),
+                        }
+                    )
+                    continue
+
+                for call in allowed_tool_calls[:1]:
+                    tool_id = call.get("id") or "export_pdf"
+                    raw_args = call.get("function", {}).get("arguments", "{}")
+                    try:
+                        parsed_args = json.loads(raw_args) if raw_args else {}
+                        result = run_export_pdf_tool(parsed_args)
+                        yield sse_event("pdf_saved", json.dumps(result))
+                        tool_content = json.dumps(result)
+                    except Exception as exc:
+                        error_payload = {"error": str(exc)}
+                        yield sse_event("pdf_saved", json.dumps(error_payload))
+                        tool_content = json.dumps(error_payload)
+
+                    pending_messages.append(
+                        {
+                            "role": "assistant",
+                            "content": assistant_text,
+                            "tool_calls": [
+                                {
+                                    "id": tool_id,
+                                    "type": "function",
+                                    "function": {
+                                        "name": "export_pdf",
+                                        "arguments": raw_args,
+                                    },
+                                }
+                            ],
+                        }
+                    )
+                    pending_messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_id,
+                            "name": "export_pdf",
+                            "content": tool_content,
+                        }
+                    )
+                continue
 
             if sources_payload:
                 yield sse_event("sources", json.dumps(sources_payload))

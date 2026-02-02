@@ -11,6 +11,13 @@ type SourceItem = {
   agent_ids?: string[] | null;
 };
 
+type ExportPdfResponse = {
+  ok: boolean;
+  filename: string;
+  path: string;
+  download_url?: string;
+};
+
 const API_BASE = "http://localhost:8000";
 const AGENTS = [
   { id: "creative_director", name: "Creative Director" },
@@ -27,6 +34,14 @@ export default function AdminPage() {
     AGENTS[0]?.id ? [AGENTS[0].id] : [],
   );
   const fileRef = useRef<HTMLInputElement>(null);
+  const [isTesting, setIsTesting] = useState(false);
+  const [testStatus, setTestStatus] = useState<{
+    state: "idle" | "success" | "error";
+    message?: string;
+    filename?: string;
+    downloadUrl?: string;
+  }>({ state: "idle" });
+  const [showTests, setShowTests] = useState(false);
 
   const loadSources = async () => {
     setIsLoading(true);
@@ -117,14 +132,73 @@ export default function AdminPage() {
     }
   };
 
+  const runPdfExportTest = async () => {
+    setIsTesting(true);
+    setTestStatus({ state: "idle" });
+    try {
+      const timestamp = new Date()
+        .toISOString()
+        .replace(/[-:]/g, "")
+        .replace(/\..+/, "");
+      const payload = {
+        title: "PDF Export Test",
+        content: "Hello from the PDF export test.",
+        filename: `pdf_export_test_${timestamp}.pdf`,
+      };
+
+      const response = await fetch(`${API_BASE}/tools/export_pdf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Request failed: ${response.status}`);
+      }
+
+      let data: ExportPdfResponse;
+      try {
+        data = (await response.json()) as ExportPdfResponse;
+      } catch {
+        throw new Error("Failed to parse server response.");
+      }
+
+      const filename = data.filename;
+      const downloadUrl =
+        data.download_url && data.download_url.startsWith("http")
+          ? data.download_url
+          : data.download_url
+            ? `${API_BASE}${data.download_url.startsWith("/") ? "" : "/"}${data.download_url}`
+            : `${API_BASE}/downloads/${filename}`;
+
+      setTestStatus({
+        state: "success",
+        message: "PDF export test succeeded.",
+        filename,
+        downloadUrl,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setTestStatus({ state: "error", message });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
   return (
     <main>
       <div className="admin-shell">
         <div className="admin-header">
-          <Link className="admin-link" href="/">
-            Back
-          </Link>
-          <div className="admin-title">Admin: RAG Sources</div>
+          <div className="admin-header-left">
+            <Link className="admin-link" href="/">
+              Back
+            </Link>
+            <div className="admin-title">Admin: RAG Sources</div>
+          </div>
+          <button className="admin-link" onClick={() => setShowTests((prev) => !prev)}>
+            Tests
+          </button>
         </div>
 
         <div className="admin-card">
@@ -201,6 +275,45 @@ export default function AdminPage() {
             </div>
           )}
         </div>
+
+        {showTests && (
+          <div className="admin-card admin-test-card">
+            <div className="admin-card-title">Tests</div>
+            <div className="admin-test-row">
+              <button onClick={() => void runPdfExportTest()} disabled={isTesting}>
+                {isTesting ? "Running..." : "Run PDF Export Test"}
+              </button>
+            </div>
+            {testStatus.state === "success" && (
+              <div className="admin-test-status success">
+                <div>{testStatus.message}</div>
+                <div className="admin-test-meta">
+                  File: {testStatus.filename}
+                  {testStatus.downloadUrl && (
+                    <>
+                      {" · "}
+                      <a className="admin-test-link" href={testStatus.downloadUrl}>
+                        Download
+                      </a>
+                      {" · "}
+                      <a
+                        className="admin-test-link"
+                        href={testStatus.downloadUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Open PDF
+                      </a>
+                    </>
+                  )}
+                </div>
+              </div>
+            )}
+            {testStatus.state === "error" && (
+              <div className="admin-test-status error">Error: {testStatus.message}</div>
+            )}
+          </div>
+        )}
       </div>
     </main>
   );

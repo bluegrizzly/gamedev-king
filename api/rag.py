@@ -3,13 +3,11 @@ import os
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import File, Form, HTTPException, UploadFile
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from supabase import Client, create_client
-
-rag_router = APIRouter()
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_TOP_K = 20
@@ -111,7 +109,6 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
-@rag_router.post("/rag/upload_pdf")
 def upload_pdf(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
@@ -181,7 +178,6 @@ def upload_pdf(
     return {"source_id": source_id, "chunks_indexed": len(chunks)}
 
 
-@rag_router.post("/rag/retrieve", response_model=RetrieveResponse)
 def retrieve(body: RetrieveRequest) -> RetrieveResponse:
     query = body.query.strip()
     if not query:
@@ -199,7 +195,6 @@ def retrieve(body: RetrieveRequest) -> RetrieveResponse:
     return RetrieveResponse(query=query, results=results)
 
 
-@rag_router.get("/rag/sources")
 def list_sources() -> list[dict]:
     try:
         supabase = get_supabase_client()

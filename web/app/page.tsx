@@ -9,6 +9,12 @@ type ChatMessage = {
   role: Role;
   content: string;
   sourcesUsed?: SourceUsed[];
+  pdf?: {
+    status: "saving" | "saved" | "error";
+    filename?: string;
+    downloadUrl?: string;
+    error?: string;
+  };
 };
 
 type SourceUsed = {
@@ -55,6 +61,7 @@ const AGENTS: AgentInfo[] = [
     image: buildAvatar("AD", "#f97316"),
   },
 ];
+const API_BASE = "http://localhost:8000";
 
 function parseSseLines(buffer: string): { events: SseEvent[]; rest: string } {
   const lines = buffer.split("\n");
@@ -125,7 +132,12 @@ export default function HomePage() {
 
     const targetAgent = agentId;
     const userMessage: ChatMessage = { role: "user", content: trimmed };
-    const assistantMessage: ChatMessage = { role: "assistant", content: "" };
+    const wantsPdf = /\b(pdf|export)\b/i.test(trimmed) || (/save/i.test(trimmed) && /pdf/i.test(trimmed));
+    const assistantMessage: ChatMessage = {
+      role: "assistant",
+      content: "",
+      pdf: wantsPdf ? { status: "saving" } : undefined,
+    };
 
     updateHistory(targetAgent, (prev) => [...prev, userMessage, assistantMessage]);
     setInput("");
@@ -169,6 +181,47 @@ export default function HomePage() {
                 }
                 return next;
               });
+            } else if (evt.event === "pdf_saved") {
+              try {
+                const payload = JSON.parse(evt.data) as {
+                  filename?: string;
+                  download_url?: string;
+                  error?: string;
+                };
+                updateHistory(targetAgent, (prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === "assistant" && last.pdf) {
+                    if (payload.error && last.pdf.status === "saving") {
+                      next[next.length - 1] = {
+                        ...last,
+                        pdf: {
+                          status: "error",
+                          error: payload.error,
+                        },
+                      };
+                    } else if (payload.filename && last.pdf.status !== "saved") {
+                      const rawUrl = payload.download_url;
+                      const downloadUrl = rawUrl
+                        ? rawUrl.startsWith("http")
+                          ? rawUrl
+                          : `${API_BASE}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`
+                        : `${API_BASE}/downloads/${payload.filename}`;
+                      next[next.length - 1] = {
+                        ...last,
+                        pdf: {
+                          status: "saved",
+                          filename: payload.filename,
+                          downloadUrl,
+                        },
+                      };
+                    }
+                  }
+                  return next;
+                });
+              } catch {
+                // Ignore malformed payloads.
+              }
             } else if (evt.event === "sources") {
               try {
                 const parsed = JSON.parse(evt.data) as SourceUsed[];
@@ -197,6 +250,20 @@ export default function HomePage() {
           }
         }
       }
+      updateHistory(targetAgent, (prev) => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last && last.role === "assistant" && last.pdf?.status === "saving") {
+          next[next.length - 1] = {
+            ...last,
+            pdf: {
+              status: "error",
+              error: "PDF export did not complete.",
+            },
+          };
+        }
+        return next;
+      });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setStatus(`Error: ${message}`);
@@ -257,6 +324,34 @@ export default function HomePage() {
                       ))}
                     </div>
                   </div>
+                )}
+                {msg.role === "assistant" && msg.pdf?.status === "saving" && (
+                  <div className="pdf-status saving">Saving PDF...</div>
+                )}
+                {msg.role === "assistant" && msg.pdf?.status === "saved" && (
+                  <div className="pdf-status saved">
+                    <div>PDF saved: {msg.pdf.filename}</div>
+                    <div className="pdf-actions">
+                      {msg.pdf.downloadUrl && (
+                        <>
+                          <a className="pdf-link" href={msg.pdf.downloadUrl}>
+                            Download
+                          </a>
+                          <a
+                            className="pdf-link"
+                            href={msg.pdf.downloadUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open
+                          </a>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {msg.role === "assistant" && msg.pdf?.status === "error" && (
+                  <div className="pdf-status error">PDF export failed: {msg.pdf.error}</div>
                 )}
               </div>
             </div>
