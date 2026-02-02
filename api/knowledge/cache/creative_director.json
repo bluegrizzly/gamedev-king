@@ -1,0 +1,24 @@
+{
+  "generated_at": "2026-01-30T16:03:40.536771Z",
+  "sources": [
+    {
+      "name": "GitBook GDD Guide",
+      "url": "https://www.gitbook.com/blog/how-to-write-a-game-design-document",
+      "tags": [
+        "gdd",
+        "structure",
+        "best_practices"
+      ],
+      "key_points": [
+        "GDDs matter most when you\u2019re collaborating.",
+        "A good game design doc lets you make faster decisions later.",
+        "A game design document, often called a GDD, is a detailed internal document that describes a video game\u2019s design.",
+        "If you only remember one thing, remember this: A GDD turns a game idea into an actionable plan the whole team can follow.",
+        "It\u2019s important to remember that lots of people from many different disciplines may refer to a GDD \u2014\u00a0from artists and level designers, to engineers, composers and even the marketing team.",
+        "So creating a document that\u2019s easy for everyone to understand is really important.",
+        "But even a solo developer may find a GDD useful, as a later reference point for decisions they took early in the process, or in case they bring in a second developer to help share the work.",
+        "GDDs can include any relevant material for the game."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,101 @@
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial,
+    "Apple Color Emoji", "Segoe UI Emoji";
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+main {
+  height: 100%;
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+
+.chat-shell {
+  width: 100%;
+  max-width: 900px;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.chat-header {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.chat-transcript {
+  flex: 1;
+  overflow-y: auto;
+  background: #161a22;
+  border: 1px solid #2a2f3a;
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.role {
+  font-weight: 600;
+  min-width: 80px;
+  color: #9aa3b2;
+}
+
+.bubble {
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.input-row {
+  display: flex;
+  gap: 12px;
+}
+
+textarea {
+  flex: 1;
+  min-height: 56px;
+  max-height: 200px;
+  resize: vertical;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px solid #2a2f3a;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+button {
+  padding: 0 18px;
+  border-radius: 10px;
+  border: none;
+  background: #3b82f6;
+  color: white;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.status {
+  font-size: 12px;
+  color: #9aa3b2;
+}

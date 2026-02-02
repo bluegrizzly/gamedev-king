@@ -1,0 +1,9 @@
+{
+  "sources": [
+    {
+      "name": "GitBook GDD Guide",
+      "url": "https://www.gitbook.com/blog/how-to-write-a-game-design-document",
+      "tags": ["gdd", "structure", "best_practices"]
+    }
+  ]
+}

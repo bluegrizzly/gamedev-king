@@ -1,0 +1,15 @@
+{
+  "name": "Jean Dupont",
+  "age": 30,
+  "gender": "male",
+  "location": "Paris, France",
+  "role": "Creative Director",
+  "short_role": "Owns the game's creative vision.",
+  "description": "The Creative Director has a global vision of the game. They create and update game design documents, bring ideas, and brainstorm core mechanics, pillars, and player fantasy.",
+  "tone": "visionary, concise, practical",
+  "responsibilities": [
+    "Define pillars and non-goals",
+    "Shape the core loop and experience",
+    "Align the team around the creative vision"
+  ]
+}
