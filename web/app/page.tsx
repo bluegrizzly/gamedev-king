@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 
 type Role = "user" | "assistant" | "system";
@@ -7,6 +8,14 @@ type Role = "user" | "assistant" | "system";
 type ChatMessage = {
   role: Role;
   content: string;
+  sourcesUsed?: SourceUsed[];
+};
+
+type SourceUsed = {
+  source_id: string;
+  title: string;
+  chunks?: number[];
+  scores?: number[];
 };
 
 type AgentInfo = {
@@ -160,6 +169,25 @@ export default function HomePage() {
                 }
                 return next;
               });
+            } else if (evt.event === "sources") {
+              try {
+                const parsed = JSON.parse(evt.data) as SourceUsed[];
+                if (Array.isArray(parsed)) {
+                  updateHistory(targetAgent, (prev) => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last && last.role === "assistant") {
+                      next[next.length - 1] = {
+                        ...last,
+                        sourcesUsed: parsed,
+                      };
+                    }
+                    return next;
+                  });
+                }
+              } catch {
+                // Ignore malformed sources payload.
+              }
             } else if (evt.event === "error") {
               setStatus(`Error: ${evt.data}`);
             } else if (evt.event === "done") {
@@ -195,7 +223,12 @@ export default function HomePage() {
   return (
     <main>
       <div className="chat-shell">
-        <div className="chat-header">Streaming Chat</div>
+        <div className="chat-top">
+          <div className="chat-header">Streaming Chat</div>
+          <Link className="admin-link" href="/admin">
+            Admin
+          </Link>
+        </div>
         <div className="chat-transcript" ref={transcriptRef}>
           {messages.length === 0 && (
             <div className="message">
@@ -206,7 +239,26 @@ export default function HomePage() {
           {messages.map((msg, idx) => (
             <div className="message" key={idx}>
               <div className="role">{getRoleLabel(msg.role)}</div>
-              <div className="bubble">{msg.content}</div>
+              <div className="bubble">
+                <div>{msg.content}</div>
+                {msg.role === "assistant" && msg.sourcesUsed && msg.sourcesUsed.length > 0 && (
+                  <div className="sources-used">
+                    <div className="sources-title">Sources used</div>
+                    <div className="sources-list">
+                      {msg.sourcesUsed.map((source) => (
+                        <div className="sources-item" key={source.source_id}>
+                          <div className="sources-name">{source.title}</div>
+                          {source.chunks && source.chunks.length > 0 && (
+                            <div className="sources-meta">
+                              chunks: {source.chunks.join(", ")}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           ))}
         </div>
@@ -224,6 +276,7 @@ export default function HomePage() {
         <div className="status">
           {status ? status : isStreaming ? "Assistant is typing..." : ""}
         </div>
+        <div className="agent-list-title">Agents</div>
         <div className="agent-list">
           {AGENTS.map((agent) => (
             <button

@@ -2,3 +2,6 @@ fastapi
 uvicorn
 openai
 python-dotenv
+pypdf
+supabase
+python-multipart

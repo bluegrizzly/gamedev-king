@@ -2,6 +2,7 @@ import json
 import os
 from pathlib import Path
 from typing import AsyncGenerator, List, Optional
+from uuid import UUID
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -9,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai import OpenAI
 from pydantic import BaseModel, Field
+
+from rag import rag_router, retrieve_chunks
 
 load_dotenv()
 
@@ -28,11 +31,19 @@ class ChatMessage(BaseModel):
     content: str
 
 
+class RagOptions(BaseModel):
+    top_k: int = Field(default=6, ge=1, le=20)
+    source_id: Optional[UUID] = None
+    agent_id: Optional[str] = None
+    agent_ids: Optional[List[str]] = None
+
+
 class ChatRequest(BaseModel):
     messages: List[ChatMessage] = Field(default_factory=list)
     message: Optional[str] = None
     agent: Optional[str] = "creative_director"
     model: Optional[str] = "gpt-5-mini"
+    rag: Optional[RagOptions] = None
 
 
 AGENT_PERSONA_FILES = {
@@ -61,6 +72,18 @@ def load_persona_text(agent_id: str) -> str:
         return ""
 
 
+def load_persona_description_prompt(agent_id: str) -> str:
+    path = AGENT_PERSONA_FILES.get(agent_id)
+    if not path:
+        return ""
+    try:
+        raw = path.read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return str(data.get("description_prompt", "")).strip()
+    except Exception:
+        return ""
+
+
 def sse_event(event: str, data: str) -> bytes:
     lines = data.split("\n")
     payload = "".join([f"event: {event}\n"] + [f"data: {line}\n" for line in lines] + ["\n"])
@@ -70,6 +93,8 @@ def sse_event(event: str, data: str) -> bytes:
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+app.include_router(rag_router)
 
 
 @app.post("/chat/stream")
@@ -88,6 +113,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             used_responses = False
             agent_id = normalize_agent_id(body.agent)
             persona_text = load_persona_text(agent_id)
+            persona_description = load_persona_description_prompt(agent_id)
             persona_prompt = ""
             if persona_text:
                 persona_prompt = (
@@ -95,6 +121,64 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     "The agent represent this persona:\n"
                     f"{persona_text}"
                 )
+
+            rag_options = body.rag or RagOptions()
+            retrieved = []
+            sources_payload = []
+            if body.messages:
+                last_user = next((m for m in reversed(body.messages) if m.role == "user"), None)
+            else:
+                last_user = None
+            rag_query = body.message.strip() if body.message else (last_user.content if last_user else "")
+
+            if rag_query:
+                try:
+                    # RAG retrieval: pull top chunks for the latest user query.
+                    agent_filter = rag_options.agent_ids
+                    if not agent_filter:
+                        agent_filter = [rag_options.agent_id or agent_id]
+                    retrieved = retrieve_chunks(
+                        rag_query,
+                        rag_options.top_k,
+                        rag_options.source_id,
+                        agent_filter,
+                    )
+                    if retrieved:
+                        grouped: dict[str, dict] = {}
+                        for item in retrieved:
+                            key = str(item.source_id)
+                            entry = grouped.setdefault(
+                                key,
+                                {
+                                    "source_id": key,
+                                    "title": item.title,
+                                    "chunks": [],
+                                    "scores": [],
+                                },
+                            )
+                            entry["chunks"].append(item.chunk_index)
+                            entry["scores"].append(item.score)
+                        sources_payload = list(grouped.values())
+                except Exception as exc:
+                    print(f"[rag] retrieval failed: {exc}")
+                    retrieved = []
+                    sources_payload = []
+
+            context_block = ""
+            if retrieved:
+                formatted_chunks = [
+                    f"[Source: {item.title} | chunk {item.chunk_index}] {item.content}"
+                    for item in retrieved
+                ]
+                context_block = "CONTEXT:\n" + "\n\n".join(formatted_chunks)
+
+            persona_prefix = persona_description or "You are a game development expert."
+            rag_system_prompt = (
+                f"{persona_prefix} "
+                "Use provided context. If context is insufficient, say what is missing instead of inventing. "
+                "When using context, prefer citing it. If the answer is not supported by context, "
+                "say so and propose what to add to the KB."
+            )
 
             use_history = body.message is not None and body.message.strip() != ""
             if use_history:
@@ -104,10 +188,12 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             else:
                 history = None
                 base_messages = [m.model_dump() for m in body.messages]
+            system_messages: list[dict] = [{"role": "system", "content": rag_system_prompt}]
             if persona_prompt:
-                input_messages = [{"role": "system", "content": persona_prompt}, *base_messages]
-            else:
-                input_messages = base_messages
+                system_messages.append({"role": "system", "content": persona_prompt})
+            if context_block:
+                system_messages.append({"role": "system", "content": context_block})
+            input_messages = [*system_messages, *base_messages]
 
             assistant_chunks: list[str] = []
             if hasattr(client, "responses"):
@@ -150,6 +236,8 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 if assistant_text:
                     history.append(ChatMessage(role="assistant", content=assistant_text))
 
+            if sources_payload:
+                yield sse_event("sources", json.dumps(sources_payload))
             yield sse_event("done", "")
         except Exception as exc:
             yield sse_event("error", str(exc))
