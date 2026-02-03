@@ -1,7 +1,7 @@
 import json
 import os
 from pathlib import Path
-from typing import Any, AsyncGenerator, List, Optional
+from typing import Any, AsyncGenerator, List, Literal, Optional
 from uuid import UUID
 
 from dotenv import load_dotenv
@@ -20,8 +20,10 @@ from image_tool import (
     run_resize_image_tool,
 )
 from pdf_export import run_export_pdf_tool
+from docx_export import run_export_docx_tool
 from pdf_routes import pdf_router
-from rag import retrieve_chunks
+from rag import get_default_project_key_value, retrieve_chunks, resolve_scope_and_project_key
+from projects import projects_router
 from rag_routes import rag_router
 
 load_dotenv()
@@ -47,6 +49,8 @@ class RagOptions(BaseModel):
     source_id: Optional[UUID] = None
     agent_id: Optional[str] = None
     agent_ids: Optional[List[str]] = None
+    scope: Literal["generic", "project", "hybrid"] = "hybrid"
+    project_key: Optional[str] = None
 
 
 class ChatRequest(BaseModel):
@@ -106,6 +110,7 @@ def health() -> dict:
     return {"ok": True}
 
 app.include_router(rag_router)
+app.include_router(projects_router)
 app.include_router(pdf_router)
 app.include_router(image_router)
 
@@ -149,11 +154,21 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     agent_filter = rag_options.agent_ids
                     if not agent_filter:
                         agent_filter = [rag_options.agent_id or agent_id]
+                    try:
+                        rag_scope, rag_project_key = resolve_scope_and_project_key(
+                            rag_options.scope,
+                            rag_options.project_key,
+                        )
+                    except Exception:
+                        rag_scope, rag_project_key = "generic", None
+                    tool_project_key = rag_project_key or get_default_project_key_value()
                     retrieved = retrieve_chunks(
                         rag_query,
                         rag_options.top_k,
                         rag_options.source_id,
                         agent_filter,
+                        rag_scope,
+                        rag_project_key or None,
                     )
                     if retrieved:
                         grouped: dict[str, dict] = {}
@@ -192,8 +207,9 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 "say so and propose what to add to the KB."
             )
             tool_instruction = (
-                "If the user explicitly requests saving or exporting to PDF, produce the full document first, "
-                "then call export_pdf with the final content and a sensible title. "
+                "If the user explicitly requests saving or exporting to PDF or DOCX, "
+                "produce the full document first with clear Markdown headings (e.g. '#', '##') and short sections, "
+                "then call export_pdf or export_docx with the final content and a sensible title. "
                 "If the user did NOT request saving, do NOT call the tool. "
                 "If the user asks to generate an image, call generate_image. "
                 "If the user asks to resize, crop, or convert an existing image, call the matching tool."
@@ -271,6 +287,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 tool_iterations += 1
                 allowed_tools = {
                     "export_pdf": "pdf_saved",
+                    "export_docx": "docx_saved",
                     "generate_image": "image_generated",
                     "resize_image": "image_updated",
                     "crop_image": "image_updated",
@@ -317,9 +334,15 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     raw_args = call.get("function", {}).get("arguments", "{}")
                     try:
                         parsed_args = json.loads(raw_args) if raw_args else {}
+                        if tool_project_key and not parsed_args.get("project_key"):
+                            parsed_args["project_key"] = tool_project_key
                         if tool_name == "export_pdf":
                             result = run_export_pdf_tool(parsed_args)
                             event_name = "pdf_saved"
+                            event_payload = result
+                        elif tool_name == "export_docx":
+                            result = run_export_docx_tool(parsed_args)
+                            event_name = "docx_saved"
                             event_payload = result
                         elif tool_name == "generate_image":
                             result = run_generate_image_tool(parsed_args)

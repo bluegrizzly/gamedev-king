@@ -20,6 +20,39 @@ def get_tools() -> list[dict]:
                             "type": "string",
                             "description": "Optional filename for the PDF (e.g. report.pdf).",
                         },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
+                        },
+                    },
+                    "required": ["title", "content"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "export_docx",
+                "description": (
+                    "Save a generated document to a DOCX file on disk. "
+                    "Use only when the user explicitly asks to save or export to DOCX."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Title to display in the DOCX."},
+                        "content": {
+                            "type": "string",
+                            "description": "Full document content to write into the DOCX.",
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Optional filename for the DOCX (e.g. report.docx).",
+                        },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
+                        },
                     },
                     "required": ["title", "content"],
                 },
@@ -43,6 +76,10 @@ def get_tools() -> list[dict]:
                         "num_images": {"type": "integer", "description": "Number of images to generate (1-4)."},
                         "seed": {"type": "integer", "description": "Optional seed for reproducibility."},
                         "model": {"type": "string", "description": "Optional model identifier."},
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
+                        },
                     },
                     "required": ["prompt"],
                 },
@@ -67,6 +104,10 @@ def get_tools() -> list[dict]:
                             "type": "string",
                             "description": "Optional output filename.",
                         },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
+                        },
                     },
                     "required": ["input_filename", "width", "height"],
                 },
@@ -89,6 +130,10 @@ def get_tools() -> list[dict]:
                             "type": "string",
                             "description": "Optional output filename.",
                         },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
+                        },
                     },
                     "required": ["input_filename", "x", "y", "width", "height"],
                 },
@@ -108,6 +153,10 @@ def get_tools() -> list[dict]:
                         "output_filename": {
                             "type": "string",
                             "description": "Optional output filename.",
+                        },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key to choose output directory.",
                         },
                     },
                     "required": ["input_filename", "format"],

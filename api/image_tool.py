@@ -5,10 +5,12 @@ import time
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional
 
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+from rag import resolve_project_path
 
 MAX_FILENAME_LEN = 120
 ALLOWED_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
@@ -30,11 +32,15 @@ MAX_PROMPT_LEN = 1000
 MAX_IMAGES = 4
 
 
-def get_images_dir() -> Path:
+def get_images_dir(project_key: Optional[str] = None) -> Path:
     raw = os.getenv("IMAGES_OUTPUT_DIR")
     if not raw:
-        project_dir = os.getenv("GAME_PROJECT_DIR")
-        raw = str(Path(project_dir) / "IMAGES_OUTPUT_DIR") if project_dir else "./output/images"
+        project_dir = resolve_project_path(project_key)
+        raw = str(Path(project_dir) / "Images") if project_dir else "./output/images"
+    elif not Path(raw).is_absolute():
+        project_dir = resolve_project_path(project_key)
+        if project_dir:
+            raw = str(Path(project_dir) / raw)
     output_dir = Path(os.path.expandvars(raw)).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
@@ -73,8 +79,8 @@ def validate_image_filename(filename: str) -> str:
     return cleaned
 
 
-def safe_resolve_path(filename: str) -> Path:
-    output_dir = get_images_dir().resolve()
+def safe_resolve_path(filename: str, project_key: Optional[str] = None) -> Path:
+    output_dir = get_images_dir(project_key).resolve()
     candidate = (output_dir / filename).resolve()
     if output_dir not in candidate.parents and candidate != output_dir:
         raise ValueError("Invalid filename path.")
@@ -88,11 +94,18 @@ def build_image_filename(prefix: str = "image", ext: str = "png") -> str:
     return sanitize_filename(f"{safe_prefix}_{timestamp}_{suffix}.{ext}", ext)
 
 
-def save_bytes_to_file(data: bytes, filename: str) -> Path:
+def save_bytes_to_file(data: bytes, filename: str, project_key: Optional[str] = None) -> Path:
     safe_name = sanitize_filename(filename)
-    output_path = safe_resolve_path(safe_name)
+    output_path = safe_resolve_path(safe_name, project_key)
     output_path.write_bytes(data)
     return output_path
+
+
+def build_image_url(filename: str, project_key: Optional[str] = None) -> str:
+    url = f"/images/{filename}"
+    if project_key:
+        url = f"{url}?project_key={project_key}"
+    return url
 
 
 def _clamp_dimension(value: int) -> int:
@@ -176,6 +189,7 @@ def generate_image(
     num_images: int = 1,
     seed: int | None = None,
     model: str = "gemini-2.5-flash-image",
+    project_key: Optional[str] = None,
 ) -> dict:
     if not prompt or len(prompt.strip()) == 0:
         raise ValueError("Prompt is required.")
@@ -190,8 +204,16 @@ def generate_image(
     if not api_key:
         image_bytes = _placeholder_image(width, height, "Leonardo API key missing.")
         filename = build_image_filename("leonardo_stub", "png")
-        save_bytes_to_file(image_bytes, filename)
-        return {"images": [{"filename": filename, "url": f"/images/{filename}"}]}
+        output_path = save_bytes_to_file(image_bytes, filename, project_key)
+        return {
+            "images": [
+                {
+                    "filename": filename,
+                    "url": build_image_url(filename, project_key),
+                    "path": str(output_path),
+                }
+            ]
+        }
 
     base_url = os.getenv("LEONARDO_API_BASE", "https://cloud.leonardo.ai/api/rest/v2").rstrip("/")
     base_url_v1 = os.getenv("LEONARDO_API_BASE_V1", "https://cloud.leonardo.ai/api/rest/v1").rstrip("/")
@@ -276,8 +298,14 @@ def generate_image(
         image_response = requests.get(url, timeout=60)
         image_response.raise_for_status()
         filename = build_image_filename(f"leonardo_{idx+1}", "png")
-        save_bytes_to_file(image_response.content, filename)
-        images.append({"filename": filename, "url": f"/images/{filename}"})
+        output_path = save_bytes_to_file(image_response.content, filename, project_key)
+        images.append(
+            {
+                "filename": filename,
+                "url": build_image_url(filename, project_key),
+                "path": str(output_path),
+            }
+        )
 
     return {"images": images}
 
@@ -288,9 +316,10 @@ def resize_image(
     height: int,
     mode: str = "contain",
     output_filename: str | None = None,
+    project_key: Optional[str] = None,
 ) -> dict:
     safe_name = validate_image_filename(input_filename)
-    input_path = safe_resolve_path(safe_name)
+    input_path = safe_resolve_path(safe_name, project_key)
     if not input_path.exists():
         raise ValueError("Input image not found.")
 
@@ -312,9 +341,13 @@ def resize_image(
 
     output_name = output_filename or build_image_filename("resize", "png")
     output_name = sanitize_filename(output_name, "png")
-    output_path = safe_resolve_path(output_name)
+    output_path = safe_resolve_path(output_name, project_key)
     resized.save(output_path, format="PNG")
-    return {"filename": output_name, "url": f"/images/{output_name}"}
+    return {
+        "filename": output_name,
+        "url": build_image_url(output_name, project_key),
+        "path": str(output_path),
+    }
 
 
 def crop_image(
@@ -324,9 +357,10 @@ def crop_image(
     width: int,
     height: int,
     output_filename: str | None = None,
+    project_key: Optional[str] = None,
 ) -> dict:
     safe_name = validate_image_filename(input_filename)
-    input_path = safe_resolve_path(safe_name)
+    input_path = safe_resolve_path(safe_name, project_key)
     if not input_path.exists():
         raise ValueError("Input image not found.")
 
@@ -343,9 +377,13 @@ def crop_image(
     cropped = image.crop((x, y, right, lower))
     output_name = output_filename or build_image_filename("crop", "png")
     output_name = sanitize_filename(output_name, "png")
-    output_path = safe_resolve_path(output_name)
+    output_path = safe_resolve_path(output_name, project_key)
     cropped.save(output_path, format="PNG")
-    return {"filename": output_name, "url": f"/images/{output_name}"}
+    return {
+        "filename": output_name,
+        "url": build_image_url(output_name, project_key),
+        "path": str(output_path),
+    }
 
 
 def convert_image(
@@ -353,9 +391,10 @@ def convert_image(
     format: str,
     quality: int | None = None,
     output_filename: str | None = None,
+    project_key: Optional[str] = None,
 ) -> dict:
     safe_name = validate_image_filename(input_filename)
-    input_path = safe_resolve_path(safe_name)
+    input_path = safe_resolve_path(safe_name, project_key)
     if not input_path.exists():
         raise ValueError("Input image not found.")
 
@@ -373,9 +412,13 @@ def convert_image(
     ext = "jpg" if target_format == "jpeg" else target_format
     output_name = output_filename or build_image_filename("convert", ext)
     output_name = sanitize_filename(output_name, ext)
-    output_path = safe_resolve_path(output_name)
+    output_path = safe_resolve_path(output_name, project_key)
     image.save(output_path, format=target_format.upper(), **save_kwargs)
-    return {"filename": output_name, "url": f"/images/{output_name}"}
+    return {
+        "filename": output_name,
+        "url": build_image_url(output_name, project_key),
+        "path": str(output_path),
+    }
 
 
 def run_generate_image_tool(args: dict) -> dict:
@@ -387,6 +430,7 @@ def run_generate_image_tool(args: dict) -> dict:
         num_images=int(args.get("num_images", 1)),
         seed=args.get("seed"),
         model=args.get("model", "gemini-image-2"),
+        project_key=str(args.get("project_key", "")).strip() or None,
     )
 
 
@@ -397,6 +441,7 @@ def run_resize_image_tool(args: dict) -> dict:
         height=int(args.get("height", 1024)),
         mode=str(args.get("mode", "contain")).strip(),
         output_filename=args.get("output_filename"),
+        project_key=str(args.get("project_key", "")).strip() or None,
     )
 
 
@@ -408,6 +453,7 @@ def run_crop_image_tool(args: dict) -> dict:
         width=int(args.get("width", 1)),
         height=int(args.get("height", 1)),
         output_filename=args.get("output_filename"),
+        project_key=str(args.get("project_key", "")).strip() or None,
     )
 
 
@@ -417,4 +463,5 @@ def run_convert_image_tool(args: dict) -> dict:
         format=str(args.get("format", "")).strip(),
         quality=args.get("quality"),
         output_filename=args.get("output_filename"),
+        project_key=str(args.get("project_key", "")).strip() or None,
     )

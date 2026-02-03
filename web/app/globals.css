@@ -356,7 +356,7 @@ button:disabled {
 
 .admin-form {
   display: grid;
-  grid-template-columns: 1fr 1fr 1fr auto;
+  grid-template-columns: 1.2fr 1fr 0.9fr 1.1fr auto;
   gap: 12px;
   align-items: center;
 }
@@ -373,10 +373,24 @@ button:disabled {
   color: #e6e6e6;
 }
 
+.admin-form select {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #2a2f3a;
+  background: #0f1115;
+  color: #e6e6e6;
+}
+
+.admin-form input[disabled] {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 .admin-agent-select {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  grid-column: 1 / -1;
 }
 
 .admin-agent-option {
@@ -394,6 +408,79 @@ button:disabled {
 .admin-status {
   font-size: 12px;
   color: #9aa3b2;
+}
+
+.admin-project-active {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.admin-project-active label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.admin-active-badge {
+  font-size: 12px;
+  color: #93c5fd;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(59, 130, 246, 0.4);
+  background: rgba(59, 130, 246, 0.1);
+}
+
+.admin-project-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1.5fr auto;
+  gap: 12px;
+}
+
+.admin-project-table {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-project-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #0f1115;
+  border: 1px solid #222836;
+}
+
+.admin-project-main {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.admin-project-title {
+  font-weight: 600;
+}
+
+.admin-project-meta {
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.admin-project-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.admin-project-edit {
+  display: grid;
+  grid-template-columns: 1fr 1.5fr auto auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .admin-list {
@@ -421,6 +508,9 @@ button:disabled {
 
 .admin-row-title {
   font-weight: 600;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .admin-row-meta {
@@ -430,6 +520,45 @@ button:disabled {
 
 .admin-delete {
   background: #ef4444;
+}
+
+.admin-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-group-title {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #9aa3b2;
+  font-weight: 600;
+  padding-left: 4px;
+}
+
+.admin-project-key {
+  color: #e6e6e6;
+}
+
+.scope-badge {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: #202532;
+  color: #e6e6e6;
+}
+
+.scope-badge.generic {
+  border-color: rgba(59, 130, 246, 0.5);
+  color: #93c5fd;
+}
+
+.scope-badge.project {
+  border-color: rgba(16, 185, 129, 0.5);
+  color: #6ee7b7;
 }
 
 .admin-empty {

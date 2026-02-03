@@ -15,7 +15,6 @@ from image_tool import (
 )
 
 image_router = APIRouter()
-get_images_dir()
 
 
 class GenerateImageRequest(BaseModel):
@@ -26,6 +25,7 @@ class GenerateImageRequest(BaseModel):
     num_images: int = 1
     seed: int | None = None
     model: str | None = None
+    project_key: str | None = None
 
 
 class ResizeImageRequest(BaseModel):
@@ -34,6 +34,7 @@ class ResizeImageRequest(BaseModel):
     height: int
     mode: str = "contain"
     output_filename: str | None = None
+    project_key: str | None = None
 
 
 class CropImageRequest(BaseModel):
@@ -43,6 +44,7 @@ class CropImageRequest(BaseModel):
     width: int
     height: int
     output_filename: str | None = None
+    project_key: str | None = None
 
 
 class ConvertImageRequest(BaseModel):
@@ -50,6 +52,7 @@ class ConvertImageRequest(BaseModel):
     format: str
     quality: int | None = None
     output_filename: str | None = None
+    project_key: str | None = None
 
 
 @image_router.post("/tools/generate_image")
@@ -63,6 +66,7 @@ def generate_image_route(body: GenerateImageRequest) -> dict:
             num_images=body.num_images,
             seed=body.seed,
             model=body.model or "gemini-image-2",
+            project_key=body.project_key,
         )
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -77,6 +81,7 @@ def resize_image_route(body: ResizeImageRequest) -> dict:
             height=body.height,
             mode=body.mode,
             output_filename=body.output_filename,
+            project_key=body.project_key,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -92,6 +97,7 @@ def crop_image_route(body: CropImageRequest) -> dict:
             width=body.width,
             height=body.height,
             output_filename=body.output_filename,
+            project_key=body.project_key,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -105,16 +111,17 @@ def convert_image_route(body: ConvertImageRequest) -> dict:
             format=body.format,
             quality=body.quality,
             output_filename=body.output_filename,
+            project_key=body.project_key,
         )
     except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @image_router.get("/images/{filename}")
-def get_image(filename: str) -> FileResponse:
+def get_image(filename: str, project_key: str | None = None) -> FileResponse:
     try:
         safe_name = validate_image_filename(filename)
-        path = safe_resolve_path(safe_name)
+        path = safe_resolve_path(safe_name, project_key)
         if not path.exists():
             raise HTTPException(status_code=404, detail="Image not found.")
         media_type, _ = mimetypes.guess_type(path.name)

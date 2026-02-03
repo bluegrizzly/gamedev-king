@@ -15,6 +15,14 @@ type ChatMessage = {
     status: "saving" | "saved" | "error";
     filename?: string;
     downloadUrl?: string;
+    path?: string;
+    error?: string;
+  };
+  docx?: {
+    status: "saving" | "saved" | "error";
+    filename?: string;
+    downloadUrl?: string;
+    path?: string;
     error?: string;
   };
 };
@@ -22,6 +30,7 @@ type ChatMessage = {
 type MessageImage = {
   filename: string;
   url: string;
+  path?: string;
 };
 
 type SourceUsed = {
@@ -140,11 +149,15 @@ export default function HomePage() {
 
     const targetAgent = agentId;
     const userMessage: ChatMessage = { role: "user", content: trimmed };
-    const wantsPdf = /\b(pdf|export)\b/i.test(trimmed) || (/save/i.test(trimmed) && /pdf/i.test(trimmed));
+    const wantsPdf = /\b(pdf)\b/i.test(trimmed) || (/save/i.test(trimmed) && /pdf/i.test(trimmed));
+    const wantsDocx =
+      /\b(docx|word|google doc|google docs)\b/i.test(trimmed) ||
+      (/save/i.test(trimmed) && /(docx|word)/i.test(trimmed));
     const assistantMessage: ChatMessage = {
       role: "assistant",
       content: "",
       pdf: wantsPdf ? { status: "saving" } : undefined,
+      docx: wantsDocx ? { status: "saving" } : undefined,
     };
 
     updateHistory(targetAgent, (prev) => [...prev, userMessage, assistantMessage]);
@@ -155,10 +168,18 @@ export default function HomePage() {
     const controller = new AbortController();
     abortRef.current = controller;
     try {
+      const storedProjectKey = window.localStorage.getItem("activeProjectKey");
+      const payload: Record<string, unknown> = {
+        agent: targetAgent,
+        message: trimmed,
+      };
+      if (storedProjectKey) {
+        payload.rag = { project_key: storedProjectKey, scope: "hybrid" };
+      }
       const response = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ agent: targetAgent, message: trimmed }),
+        body: JSON.stringify(payload),
         signal: controller.signal,
       });
 
@@ -250,6 +271,7 @@ export default function HomePage() {
                 const payload = JSON.parse(evt.data) as {
                   filename?: string;
                   download_url?: string;
+                  path?: string;
                   error?: string;
                 };
                 updateHistory(targetAgent, (prev) => {
@@ -277,6 +299,7 @@ export default function HomePage() {
                           status: "saved",
                           filename: payload.filename,
                           downloadUrl,
+                          path: payload.path,
                         },
                       };
                     }
@@ -307,6 +330,49 @@ export default function HomePage() {
               }
             } else if (evt.event === "error") {
               setStatus(`Error: ${evt.data}`);
+            } else if (evt.event === "docx_saved") {
+              try {
+                const payload = JSON.parse(evt.data) as {
+                  filename?: string;
+                  download_url?: string;
+                  path?: string;
+                  error?: string;
+                };
+                updateHistory(targetAgent, (prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === "assistant" && last.docx) {
+                    if (payload.error && last.docx.status === "saving") {
+                      next[next.length - 1] = {
+                        ...last,
+                        docx: {
+                          status: "error",
+                          error: payload.error,
+                        },
+                      };
+                    } else if (payload.filename && last.docx.status !== "saved") {
+                      const rawUrl = payload.download_url;
+                      const downloadUrl = rawUrl
+                        ? rawUrl.startsWith("http")
+                          ? rawUrl
+                          : `${API_BASE}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`
+                        : `${API_BASE}/downloads/${payload.filename}`;
+                      next[next.length - 1] = {
+                        ...last,
+                        docx: {
+                          status: "saved",
+                          filename: payload.filename,
+                          downloadUrl,
+                          path: payload.path,
+                        },
+                      };
+                    }
+                  }
+                  return next;
+                });
+              } catch {
+                // Ignore malformed payloads.
+              }
             } else if (evt.event === "done") {
               done = true;
               break;
@@ -323,6 +389,15 @@ export default function HomePage() {
             pdf: {
               status: "error",
               error: "PDF export did not complete.",
+            },
+          };
+        }
+        if (last && last.role === "assistant" && last.docx?.status === "saving") {
+          next[next.length - 1] = {
+            ...last,
+            docx: {
+              status: "error",
+              error: "DOCX export did not complete.",
             },
           };
         }
@@ -410,6 +485,7 @@ export default function HomePage() {
                           <div className="image-item" key={img.filename}>
                             <img className="image-preview" src={src} alt={img.filename} />
                             <div className="image-name">{img.filename}</div>
+                            {img.path && <div className="image-name">{img.path}</div>}
                           </div>
                         );
                       })}
@@ -425,6 +501,7 @@ export default function HomePage() {
                 {msg.role === "assistant" && msg.pdf?.status === "saved" && (
                   <div className="pdf-status saved">
                     <div>PDF saved: {msg.pdf.filename}</div>
+                    {msg.pdf.path && <div>Path: {msg.pdf.path}</div>}
                     <div className="pdf-actions">
                       {msg.pdf.downloadUrl && (
                         <>
@@ -446,6 +523,35 @@ export default function HomePage() {
                 )}
                 {msg.role === "assistant" && msg.pdf?.status === "error" && (
                   <div className="pdf-status error">PDF export failed: {msg.pdf.error}</div>
+                )}
+                {msg.role === "assistant" && msg.docx?.status === "saving" && (
+                  <div className="pdf-status saving">Saving DOCX...</div>
+                )}
+                {msg.role === "assistant" && msg.docx?.status === "saved" && (
+                  <div className="pdf-status saved">
+                    <div>DOCX saved: {msg.docx.filename}</div>
+                    {msg.docx.path && <div>Path: {msg.docx.path}</div>}
+                    <div className="pdf-actions">
+                      {msg.docx.downloadUrl && (
+                        <>
+                          <a className="pdf-link" href={msg.docx.downloadUrl}>
+                            Download
+                          </a>
+                          <a
+                            className="pdf-link"
+                            href={msg.docx.downloadUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                          >
+                            Open
+                          </a>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                )}
+                {msg.role === "assistant" && msg.docx?.status === "error" && (
+                  <div className="pdf-status error">DOCX export failed: {msg.docx.error}</div>
                 )}
               </div>
             </div>

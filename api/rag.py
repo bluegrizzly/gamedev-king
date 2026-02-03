@@ -1,17 +1,20 @@
 import io
 import os
-from typing import List, Optional
+from typing import List, Literal, Optional
 from uuid import UUID
 
 from fastapi import File, Form, HTTPException, UploadFile
 from openai import OpenAI
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
+from docx import Document
 from supabase import Client, create_client
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_TOP_K = 20
 DEFAULT_TOP_K = 6
+EMBEDDING_BATCH_SIZE = 50
+VALID_SCOPES = ("generic", "project", "hybrid")
 
 
 class RetrieveRequest(BaseModel):
@@ -20,6 +23,8 @@ class RetrieveRequest(BaseModel):
     source_id: Optional[UUID] = None
     agent_id: Optional[str] = None
     agent_ids: Optional[List[str]] = None
+    scope: Literal["generic", "project", "hybrid"] = "hybrid"
+    project_key: Optional[str] = None
 
 
 class RetrieveResult(BaseModel):
@@ -28,6 +33,8 @@ class RetrieveResult(BaseModel):
     content: str
     score: float
     title: str
+    scope: str
+    project_key: Optional[str]
 
 
 class RetrieveResponse(BaseModel):
@@ -40,6 +47,8 @@ def retrieve_chunks(
     top_k: int,
     source_id: Optional[UUID],
     agent_ids: Optional[List[str]],
+    scope: str,
+    project_key: Optional[str],
 ) -> List[RetrieveResult]:
     api_key = os.getenv("OPENAI_API_KEY")
     if not api_key:
@@ -58,6 +67,8 @@ def retrieve_chunks(
         "match_count": top_k,
         "source_filter": str(source_id) if source_id else None,
         "agent_filter": agent_ids,
+        "scope_mode": scope,
+        "project_key_filter": project_key,
     }
     result = supabase.rpc("match_chunks", rpc_payload).execute()
     rows = result.data or []
@@ -68,6 +79,8 @@ def retrieve_chunks(
             content=row["content"],
             score=float(row["distance"]),
             title=row["title"],
+            scope=row.get("scope", "generic"),
+            project_key=row.get("project_key"),
         )
         for row in rows
     ]
@@ -93,12 +106,40 @@ def chunk_text(text: str, chunk_size: int = 1200, overlap: int = 200) -> List[st
 
 def extract_pdf_text(file_bytes: bytes) -> str:
     reader = PdfReader(io.BytesIO(file_bytes))
-    pages = []
+    pages_lines: list[list[str]] = []
+    header_counts: dict[str, int] = {}
+    footer_counts: dict[str, int] = {}
+
     for page in reader.pages:
         extracted = page.extract_text() or ""
-        if extracted.strip():
-            pages.append(extracted)
-    return "\n".join(pages).strip()
+        lines = [line.strip() for line in extracted.splitlines() if line.strip()]
+        if not lines:
+            continue
+        # Skip very short pages (likely blank or separator pages)
+        if len(" ".join(lines)) < 50:
+            continue
+        pages_lines.append(lines)
+        header_counts[lines[0]] = header_counts.get(lines[0], 0) + 1
+        footer_counts[lines[-1]] = footer_counts.get(lines[-1], 0) + 1
+
+    header_blacklist = {line for line, count in header_counts.items() if count >= 3}
+    footer_blacklist = {line for line, count in footer_counts.items() if count >= 3}
+
+    cleaned_pages: list[str] = []
+    for lines in pages_lines:
+        filtered: list[str] = []
+        for idx, line in enumerate(lines):
+            if idx == 0 and line in header_blacklist:
+                continue
+            if idx == len(lines) - 1 and line in footer_blacklist:
+                continue
+            if line.isdigit():
+                continue
+            filtered.append(line)
+        if filtered:
+            cleaned_pages.append("\n".join(filtered))
+
+    return "\n".join(cleaned_pages).strip()
 
 
 def get_supabase_client() -> Client:
@@ -109,23 +150,119 @@ def get_supabase_client() -> Client:
     return create_client(supabase_url, supabase_key)
 
 
+def project_exists(supabase: Client, project_key: str) -> bool:
+    if not project_key:
+        return False
+    result = (
+        supabase.table("projects")
+        .select("project_key")
+        .eq("project_key", project_key)
+        .limit(1)
+        .execute()
+    )
+    return bool(result.data)
+
+
+def get_default_project_key(supabase: Client) -> Optional[str]:
+    result = (
+        supabase.table("projects")
+        .select("project_key")
+        .order("created_at", desc=False)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0].get("project_key")
+    return None
+
+
+def get_default_project_key_value() -> Optional[str]:
+    supabase = get_supabase_client()
+    return get_default_project_key(supabase)
+
+
+def get_project_path(supabase: Client, project_key: str) -> Optional[str]:
+    if not project_key:
+        return None
+    result = (
+        supabase.table("projects")
+        .select("project_path")
+        .eq("project_key", project_key)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0].get("project_path")
+    return None
+
+
+def resolve_project_path(project_key: Optional[str]) -> Optional[str]:
+    supabase = get_supabase_client()
+    cleaned_key = project_key.strip() if project_key else ""
+    if cleaned_key:
+        path = get_project_path(supabase, cleaned_key)
+        if path:
+            return path
+    default_key = get_default_project_key(supabase)
+    if not default_key:
+        return None
+    return get_project_path(supabase, default_key)
+
+
+def resolve_scope_and_project_key(scope: str, project_key: Optional[str]) -> tuple[str, Optional[str]]:
+    cleaned_scope = (scope or "hybrid").strip().lower()
+    if cleaned_scope not in VALID_SCOPES:
+        raise HTTPException(status_code=400, detail="Invalid scope.")
+    cleaned_project_key = project_key.strip() if project_key else ""
+    if cleaned_scope in ("project", "hybrid") and not cleaned_project_key:
+        supabase = get_supabase_client()
+        default_key = get_default_project_key(supabase)
+        if default_key:
+            return cleaned_scope, default_key
+        return "generic", None
+    if cleaned_scope == "generic":
+        return "generic", None
+    return cleaned_scope, cleaned_project_key
+
+
+def extract_docx_text(file_bytes: bytes) -> str:
+    document = Document(io.BytesIO(file_bytes))
+    paragraphs = [para.text.strip() for para in document.paragraphs if para.text.strip()]
+    return "\n".join(paragraphs).strip()
+
+
 def upload_pdf(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     agent_ids: Optional[List[str]] = Form(None),
+    scope: str = Form("generic"),
+    project_key: Optional[str] = Form(None),
 ) -> dict:
-    if not file.filename or not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are supported.")
-    if file.content_type not in (None, "", "application/pdf"):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="A file is required.")
+    filename_lower = file.filename.lower()
+    is_pdf = filename_lower.endswith(".pdf")
+    is_docx = filename_lower.endswith(".docx")
+    if not (is_pdf or is_docx):
+        raise HTTPException(status_code=400, detail="Only PDF or DOCX files are supported.")
+    if file.content_type not in (
+        None,
+        "",
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ):
         raise HTTPException(status_code=400, detail="Invalid content type.")
 
     file_bytes = file.file.read()
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload.")
 
-    text = extract_pdf_text(file_bytes)
+    if is_pdf:
+        text = extract_pdf_text(file_bytes)
+    else:
+        text = extract_docx_text(file_bytes)
     if not text.strip():
-        raise HTTPException(status_code=400, detail="No text extracted from PDF.")
+        raise HTTPException(status_code=400, detail="No text extracted from file.")
 
     chunks = chunk_text(text, chunk_size=1200, overlap=200)
     if not chunks:
@@ -137,11 +274,14 @@ def upload_pdf(
 
     openai_client = OpenAI(api_key=api_key)
     try:
-        embedding_response = openai_client.embeddings.create(
-            model=EMBEDDING_MODEL,
-            input=chunks,
-        )
-        embeddings = [item.embedding for item in embedding_response.data]
+        embeddings: list[list[float]] = []
+        for i in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+            batch = chunks[i : i + EMBEDDING_BATCH_SIZE]
+            embedding_response = openai_client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=batch,
+            )
+            embeddings.extend([item.embedding for item in embedding_response.data])
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"Embedding failed: {exc}") from exc
 
@@ -151,10 +291,26 @@ def upload_pdf(
     source_title = title.strip() if title and title.strip() else file.filename
     cleaned_agents = [agent.strip() for agent in (agent_ids or []) if agent.strip()]
     source_agents = cleaned_agents if cleaned_agents else None
+    cleaned_scope = scope.strip().lower()
+    if cleaned_scope not in ("generic", "project"):
+        raise HTTPException(status_code=400, detail="Invalid scope.")
+    cleaned_project_key = project_key.strip() if project_key else ""
+    if cleaned_scope == "project":
+        if not cleaned_project_key:
+            raise HTTPException(status_code=400, detail="project_key is required for project scope.")
+    else:
+        cleaned_project_key = ""
 
     try:
         supabase = get_supabase_client()
-        source_payload = {"title": source_title, "agent_ids": source_agents}
+        if cleaned_scope == "project" and not project_exists(supabase, cleaned_project_key):
+            raise HTTPException(status_code=400, detail="Unknown project_key.")
+        source_payload = {
+            "title": source_title,
+            "agent_ids": source_agents,
+            "scope": cleaned_scope,
+            "project_key": cleaned_project_key or None,
+        }
         source_result = supabase.table("sources").insert(source_payload).execute()
         if not source_result.data:
             raise RuntimeError("No source row returned.")
@@ -166,6 +322,8 @@ def upload_pdf(
                 "chunk_index": idx,
                 "content": chunk,
                 "embedding": embeddings[idx],
+                "scope": cleaned_scope,
+                "project_key": cleaned_project_key or None,
             }
             for idx, chunk in enumerate(chunks)
         ]
@@ -187,7 +345,18 @@ def retrieve(body: RetrieveRequest) -> RetrieveResponse:
         agent_filter = body.agent_ids
         if not agent_filter and body.agent_id:
             agent_filter = [body.agent_id]
-        results = retrieve_chunks(query, body.top_k, body.source_id, agent_filter)
+        cleaned_scope, cleaned_project_key = resolve_scope_and_project_key(
+            body.scope,
+            body.project_key,
+        )
+        results = retrieve_chunks(
+            query,
+            body.top_k,
+            body.source_id,
+            agent_filter,
+            cleaned_scope,
+            cleaned_project_key or None,
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except Exception as exc:
@@ -200,10 +369,23 @@ def list_sources() -> list[dict]:
         supabase = get_supabase_client()
         result = (
             supabase.table("sources")
-            .select("id,title,created_at,agent_id,agent_ids")
+            .select("id,title,created_at,agent_id,agent_ids,scope,project_key")
             .order("created_at", desc=True)
             .execute()
         )
         return result.data or []
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to load sources: {exc}") from exc
+
+
+def delete_source(source_id: UUID) -> dict:
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table("sources").delete().eq("id", str(source_id)).execute()
+        if not result.data:
+            raise HTTPException(status_code=404, detail="Source not found.")
+        return {"deleted": True, "source_id": str(source_id)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete source: {exc}") from exc

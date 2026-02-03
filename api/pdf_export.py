@@ -2,22 +2,28 @@ import os
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, Tuple
+from typing import Iterable, Optional, Tuple
 
 from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
+
+from rag import resolve_project_path
 
 MAX_FILENAME_LEN = 120
 ALLOWED_FILENAME_RE = re.compile(r"[^a-zA-Z0-9\-_. ]+")
 ALLOWED_DOWNLOAD_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
-def get_doc_output_dir() -> Path:
+def get_doc_output_dir(project_key: Optional[str] = None) -> Path:
     raw = os.getenv("DOC_OUTPUT_DIR")
     if not raw:
-        project_dir = os.getenv("GAME_PROJECT_DIR")
-        raw = str(Path(project_dir) / "Images") if project_dir else "./output"
+        project_dir = resolve_project_path(project_key)
+        raw = str(Path(project_dir) / "Documents") if project_dir else "./output"
+    elif not Path(raw).is_absolute():
+        project_dir = resolve_project_path(project_key)
+        if project_dir:
+            raw = str(Path(project_dir) / raw)
     output_dir = Path(os.path.expandvars(raw)).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
@@ -49,8 +55,8 @@ def build_filename(title: str) -> str:
     return sanitize_filename(f"{base}_{timestamp}.pdf")
 
 
-def ensure_output_path(filename: str) -> Path:
-    output_dir = get_doc_output_dir().resolve()
+def ensure_output_path(filename: str, project_key: Optional[str] = None) -> Path:
+    output_dir = get_doc_output_dir(project_key).resolve()
     candidate = (output_dir / filename).resolve()
     if output_dir not in candidate.parents and candidate != output_dir:
         raise ValueError("Invalid filename path.")
@@ -65,8 +71,8 @@ def validate_download_filename(filename: str) -> str:
         raise ValueError("Invalid filename.")
     if ".." in cleaned:
         raise ValueError("Invalid filename.")
-    if not cleaned.lower().endswith(".pdf"):
-        raise ValueError("Only .pdf files are allowed.")
+    if not cleaned.lower().endswith((".pdf", ".docx")):
+        raise ValueError("Only .pdf or .docx files are allowed.")
     if not ALLOWED_DOWNLOAD_RE.match(cleaned):
         raise ValueError("Filename contains invalid characters.")
     if len(cleaned) > MAX_FILENAME_LEN:
@@ -97,9 +103,14 @@ def _wrap_text(text: str, font_name: str, font_size: int, max_width: float) -> I
             yield wrapped
 
 
-def write_pdf(title: str, content: str, filename: str) -> Tuple[str, Path]:
+def write_pdf(
+    title: str,
+    content: str,
+    filename: str,
+    project_key: Optional[str] = None,
+) -> Tuple[str, Path]:
     safe_name = sanitize_filename(filename)
-    output_path = ensure_output_path(safe_name)
+    output_path = ensure_output_path(safe_name, project_key)
 
     page_width, page_height = LETTER
     margin = 54
@@ -132,6 +143,7 @@ def run_export_pdf_tool(args: dict) -> dict:
     title = str(args.get("title", "")).strip()
     content = str(args.get("content", "")).strip()
     filename = str(args.get("filename", "")).strip() if args.get("filename") else ""
+    project_key = str(args.get("project_key", "")).strip() if args.get("project_key") else None
 
     if not title:
         raise ValueError("Tool arg 'title' is required.")
@@ -141,10 +153,13 @@ def run_export_pdf_tool(args: dict) -> dict:
         raise ValueError("Tool arg 'content' exceeds 2MB limit.")
 
     final_filename = filename or build_filename(title)
-    saved_name, output_path = write_pdf(title, content, final_filename)
+    saved_name, output_path = write_pdf(title, content, final_filename, project_key)
+    download_url = f"/downloads/{saved_name}"
+    if project_key:
+        download_url = f"{download_url}?project_key={project_key}"
     return {
         "ok": True,
         "filename": saved_name,
         "path": str(output_path),
-        "download_url": f"/downloads/{saved_name}",
+        "download_url": download_url,
     }
