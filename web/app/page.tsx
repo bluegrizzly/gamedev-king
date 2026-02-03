@@ -9,12 +9,19 @@ type ChatMessage = {
   role: Role;
   content: string;
   sourcesUsed?: SourceUsed[];
+  images?: MessageImage[];
+  imageError?: string;
   pdf?: {
     status: "saving" | "saved" | "error";
     filename?: string;
     downloadUrl?: string;
     error?: string;
   };
+};
+
+type MessageImage = {
+  filename: string;
+  url: string;
 };
 
 type SourceUsed = {
@@ -109,6 +116,7 @@ export default function HomePage() {
   const [isStreaming, setIsStreaming] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
+  const abortRef = useRef<AbortController | null>(null);
   const messages = historyByAgent[agentId] ?? [];
   const activeAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
 
@@ -144,11 +152,14 @@ export default function HomePage() {
     setIsStreaming(true);
     setStatus("Streaming...");
 
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const response = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ agent: targetAgent, message: trimmed }),
+        signal: controller.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -181,6 +192,59 @@ export default function HomePage() {
                 }
                 return next;
               });
+            } else if (evt.event === "image_generated") {
+              try {
+                const payload = JSON.parse(evt.data) as {
+                  images?: MessageImage[];
+                  error?: string;
+                };
+                updateHistory(targetAgent, (prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === "assistant") {
+                    if (payload.error) {
+                      next[next.length - 1] = { ...last, imageError: payload.error };
+                    } else if (payload.images && payload.images.length > 0) {
+                      const existing = last.images ?? [];
+                      const merged = [
+                        ...existing,
+                        ...payload.images.filter(
+                          (img) => !existing.some((existingImg) => existingImg.filename === img.filename),
+                        ),
+                      ];
+                      next[next.length - 1] = { ...last, images: merged };
+                    }
+                  }
+                  return next;
+                });
+              } catch {
+                // Ignore malformed payloads.
+              }
+            } else if (evt.event === "image_updated") {
+              try {
+                const payload = JSON.parse(evt.data) as {
+                  result?: MessageImage;
+                  error?: string;
+                };
+                updateHistory(targetAgent, (prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === "assistant") {
+                    if (payload.error) {
+                      next[next.length - 1] = { ...last, imageError: payload.error };
+                    } else if (payload.result) {
+                      const existing = last.images ?? [];
+                      const merged = existing.some((img) => img.filename === payload.result?.filename)
+                        ? existing
+                        : [...existing, payload.result];
+                      next[next.length - 1] = { ...last, images: merged };
+                    }
+                  }
+                  return next;
+                });
+              } catch {
+                // Ignore malformed payloads.
+              }
             } else if (evt.event === "pdf_saved") {
               try {
                 const payload = JSON.parse(evt.data) as {
@@ -266,11 +330,20 @@ export default function HomePage() {
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
-      setStatus(`Error: ${message}`);
+      if (message !== "The user aborted a request.") {
+        setStatus(`Error: ${message}`);
+      }
     } finally {
       setIsStreaming(false);
       setStatus((prev) => (prev?.startsWith("Error") ? prev : null));
+      abortRef.current = null;
     }
+  };
+
+  const stopStreaming = () => {
+    abortRef.current?.abort();
+    setIsStreaming(false);
+    setStatus(null);
   };
 
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
@@ -325,6 +398,27 @@ export default function HomePage() {
                     </div>
                   </div>
                 )}
+                {msg.role === "assistant" && msg.images && msg.images.length > 0 && (
+                  <div className="image-block">
+                    <div className="image-title">Images</div>
+                    <div className="image-grid">
+                      {msg.images.map((img) => {
+                        const src = img.url.startsWith("http")
+                          ? img.url
+                          : `${API_BASE}${img.url.startsWith("/") ? "" : "/"}${img.url}`;
+                        return (
+                          <div className="image-item" key={img.filename}>
+                            <img className="image-preview" src={src} alt={img.filename} />
+                            <div className="image-name">{img.filename}</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {msg.role === "assistant" && msg.imageError && (
+                  <div className="pdf-status error">Image error: {msg.imageError}</div>
+                )}
                 {msg.role === "assistant" && msg.pdf?.status === "saving" && (
                   <div className="pdf-status saving">Saving PDF...</div>
                 )}
@@ -366,6 +460,13 @@ export default function HomePage() {
           />
           <button onClick={() => void sendMessage()} disabled={isStreaming}>
             Send
+          </button>
+          <button
+            className="stop-button"
+            onClick={stopStreaming}
+            disabled={!isStreaming}
+          >
+            Stop
           </button>
         </div>
         <div className="status">

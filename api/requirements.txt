@@ -6,3 +6,5 @@ pypdf
 supabase
 python-multipart
 reportlab
+pillow
+requests

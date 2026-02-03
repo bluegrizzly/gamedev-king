@@ -1,19 +1,21 @@
+import os
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from image_tool import get_images_dir
 from pdf_export import (
     build_filename,
     ensure_output_path,
-    get_output_dir,
+    get_doc_output_dir,
     validate_download_filename,
     write_pdf,
 )
 
 pdf_router = APIRouter()
-get_output_dir()
+get_doc_output_dir()
 
 
 class ExportPdfRequest(BaseModel):
@@ -71,3 +73,15 @@ def download_pdf(filename: str) -> FileResponse:
     except Exception as exc:
         print(f"[download_pdf] failed: {exc}")
         raise HTTPException(status_code=500, detail="Failed to read PDF.") from exc
+
+
+@pdf_router.get("/tools/paths")
+def get_tool_paths() -> dict:
+    project_dir = os.getenv("GAME_PROJECT_DIR") or ""
+    doc_dir = str(get_doc_output_dir().resolve())
+    image_dir = str(get_images_dir().resolve())
+    return {
+        "GAME_PROJECT_DIR": project_dir,
+        "DOC_OUTPUT_DIR": doc_dir,
+        "IMAGES_OUTPUT_DIR": image_dir,
+    }

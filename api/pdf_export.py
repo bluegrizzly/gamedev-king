@@ -13,9 +13,12 @@ ALLOWED_FILENAME_RE = re.compile(r"[^a-zA-Z0-9\-_. ]+")
 ALLOWED_DOWNLOAD_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 
 
-def get_output_dir() -> Path:
-    raw = os.getenv("OUTPUT_DIR", "./output")
-    output_dir = Path(raw).expanduser()
+def get_doc_output_dir() -> Path:
+    raw = os.getenv("DOC_OUTPUT_DIR")
+    if not raw:
+        project_dir = os.getenv("GAME_PROJECT_DIR")
+        raw = str(Path(project_dir) / "Images") if project_dir else "./output"
+    output_dir = Path(os.path.expandvars(raw)).expanduser()
     output_dir.mkdir(parents=True, exist_ok=True)
     return output_dir
 
@@ -47,7 +50,7 @@ def build_filename(title: str) -> str:
 
 
 def ensure_output_path(filename: str) -> Path:
-    output_dir = get_output_dir().resolve()
+    output_dir = get_doc_output_dir().resolve()
     candidate = (output_dir / filename).resolve()
     if output_dir not in candidate.parents and candidate != output_dir:
         raise ValueError("Invalid filename path.")

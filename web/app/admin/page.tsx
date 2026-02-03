@@ -18,6 +18,12 @@ type ExportPdfResponse = {
   download_url?: string;
 };
 
+type ToolPathsResponse = {
+  GAME_PROJECT_DIR?: string;
+  DOC_OUTPUT_DIR?: string;
+  IMAGES_OUTPUT_DIR?: string;
+};
+
 const API_BASE = "http://localhost:8000";
 const AGENTS = [
   { id: "creative_director", name: "Creative Director" },
@@ -40,6 +46,11 @@ export default function AdminPage() {
     message?: string;
     filename?: string;
     downloadUrl?: string;
+  }>({ state: "idle" });
+  const [pathsStatus, setPathsStatus] = useState<{
+    state: "idle" | "success" | "error";
+    message?: string;
+    data?: ToolPathsResponse;
   }>({ state: "idle" });
   const [showTests, setShowTests] = useState(false);
 
@@ -186,6 +197,22 @@ export default function AdminPage() {
     }
   };
 
+  const runPathsTest = async () => {
+    setPathsStatus({ state: "idle" });
+    try {
+      const response = await fetch(`${API_BASE}/tools/paths`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Request failed: ${response.status}`);
+      }
+      const data = (await response.json()) as ToolPathsResponse;
+      setPathsStatus({ state: "success", data });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setPathsStatus({ state: "error", message });
+    }
+  };
+
   return (
     <main>
       <div className="admin-shell">
@@ -283,6 +310,7 @@ export default function AdminPage() {
               <button onClick={() => void runPdfExportTest()} disabled={isTesting}>
                 {isTesting ? "Running..." : "Run PDF Export Test"}
               </button>
+              <button onClick={() => void runPathsTest()}>Show Paths</button>
             </div>
             {testStatus.state === "success" && (
               <div className="admin-test-status success">
@@ -311,6 +339,22 @@ export default function AdminPage() {
             )}
             {testStatus.state === "error" && (
               <div className="admin-test-status error">Error: {testStatus.message}</div>
+            )}
+            {pathsStatus.state === "success" && (
+              <div className="admin-test-status">
+                <div className="admin-test-meta">
+                  GAME_PROJECT_DIR: {pathsStatus.data?.GAME_PROJECT_DIR || "-"}
+                </div>
+                <div className="admin-test-meta">
+                  DOC_OUTPUT_DIR: {pathsStatus.data?.DOC_OUTPUT_DIR || "-"}
+                </div>
+                <div className="admin-test-meta">
+                  IMAGES_OUTPUT_DIR: {pathsStatus.data?.IMAGES_OUTPUT_DIR || "-"}
+                </div>
+              </div>
+            )}
+            {pathsStatus.state === "error" && (
+              <div className="admin-test-status error">Error: {pathsStatus.message}</div>
             )}
           </div>
         )}

@@ -12,6 +12,13 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from llm_tools import get_tools
+from image_router import image_router
+from image_tool import (
+    run_convert_image_tool,
+    run_crop_image_tool,
+    run_generate_image_tool,
+    run_resize_image_tool,
+)
 from pdf_export import run_export_pdf_tool
 from pdf_routes import pdf_router
 from rag import retrieve_chunks
@@ -100,6 +107,7 @@ def health() -> dict:
 
 app.include_router(rag_router)
 app.include_router(pdf_router)
+app.include_router(image_router)
 
 
 @app.post("/chat/stream")
@@ -186,7 +194,9 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             tool_instruction = (
                 "If the user explicitly requests saving or exporting to PDF, produce the full document first, "
                 "then call export_pdf with the final content and a sensible title. "
-                "If the user did NOT request saving, do NOT call the tool."
+                "If the user did NOT request saving, do NOT call the tool. "
+                "If the user asks to generate an image, call generate_image. "
+                "If the user asks to resize, crop, or convert an existing image, call the matching tool."
             )
 
             use_history = body.message is not None and body.message.strip() != ""
@@ -207,7 +217,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 system_messages.append({"role": "system", "content": context_block})
             input_messages: list[dict[str, Any]] = [*system_messages, *base_messages]
 
-            max_tool_iterations = 2
+            max_tool_iterations = 3
             tool_iterations = 0
             pending_messages = list(input_messages)
 
@@ -259,8 +269,16 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     break
 
                 tool_iterations += 1
-                # Only allow export_pdf tool calls.
-                allowed_tool_calls = [call for call in tool_calls if call.get("function", {}).get("name") == "export_pdf"]
+                allowed_tools = {
+                    "export_pdf": "pdf_saved",
+                    "generate_image": "image_generated",
+                    "resize_image": "image_updated",
+                    "crop_image": "image_updated",
+                    "convert_image": "image_updated",
+                }
+                allowed_tool_calls = [
+                    call for call in tool_calls if call.get("function", {}).get("name") in allowed_tools
+                ]
                 if not allowed_tool_calls:
                     first_call = tool_calls[0]
                     tool_id = first_call.get("id") or "unknown_tool"
@@ -294,16 +312,41 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     continue
 
                 for call in allowed_tool_calls[:1]:
-                    tool_id = call.get("id") or "export_pdf"
+                    tool_name = call.get("function", {}).get("name", "")
+                    tool_id = call.get("id") or tool_name or "tool"
                     raw_args = call.get("function", {}).get("arguments", "{}")
                     try:
                         parsed_args = json.loads(raw_args) if raw_args else {}
-                        result = run_export_pdf_tool(parsed_args)
-                        yield sse_event("pdf_saved", json.dumps(result))
+                        if tool_name == "export_pdf":
+                            result = run_export_pdf_tool(parsed_args)
+                            event_name = "pdf_saved"
+                            event_payload = result
+                        elif tool_name == "generate_image":
+                            result = run_generate_image_tool(parsed_args)
+                            event_name = "image_generated"
+                            event_payload = result
+                        elif tool_name == "resize_image":
+                            result = run_resize_image_tool(parsed_args)
+                            event_name = "image_updated"
+                            event_payload = {"operation": "resize", "result": result}
+                        elif tool_name == "crop_image":
+                            result = run_crop_image_tool(parsed_args)
+                            event_name = "image_updated"
+                            event_payload = {"operation": "crop", "result": result}
+                        elif tool_name == "convert_image":
+                            result = run_convert_image_tool(parsed_args)
+                            event_name = "image_updated"
+                            event_payload = {"operation": "convert", "result": result}
+                        else:
+                            raise ValueError("Unsupported tool.")
+                        yield sse_event(event_name, json.dumps(event_payload))
                         tool_content = json.dumps(result)
                     except Exception as exc:
                         error_payload = {"error": str(exc)}
-                        yield sse_event("pdf_saved", json.dumps(error_payload))
+                        event_name = allowed_tools.get(tool_name, "error")
+                        if event_name == "image_updated":
+                            error_payload = {"operation": tool_name.replace("_image", ""), "error": str(exc)}
+                        yield sse_event(event_name, json.dumps(error_payload))
                         tool_content = json.dumps(error_payload)
 
                     pending_messages.append(
@@ -315,7 +358,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                                     "id": tool_id,
                                     "type": "function",
                                     "function": {
-                                        "name": "export_pdf",
+                                        "name": tool_name or "tool",
                                         "arguments": raw_args,
                                     },
                                 }
@@ -326,7 +369,7 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                         {
                             "role": "tool",
                             "tool_call_id": tool_id,
-                            "name": "export_pdf",
+                            "name": tool_name or "tool",
                             "content": tool_content,
                         }
                     )
