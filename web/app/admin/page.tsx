@@ -11,6 +11,7 @@ type SourceItem = {
   agent_ids?: string[] | null;
   scope?: "generic" | "project";
   project_key?: string | null;
+  source_path?: string | null;
 };
 
 type ProjectItem = {
@@ -48,6 +49,7 @@ export default function AdminPage() {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [title, setTitle] = useState("");
+  const [sourcePath, setSourcePath] = useState("");
   const [agentIds, setAgentIds] = useState<string[]>(
     AGENTS[0]?.id ? [AGENTS[0].id] : [],
   );
@@ -177,6 +179,9 @@ export default function AdminPage() {
       if (title.trim()) {
         formData.append("title", title.trim());
       }
+      if (sourcePath.trim()) {
+        formData.append("source_path", sourcePath.trim());
+      }
       if (scope === "project" && projectKey.trim()) {
         formData.append("project_key", projectKey.trim());
       }
@@ -195,6 +200,7 @@ export default function AdminPage() {
 
       setStatus("Upload successful.");
       setTitle("");
+      setSourcePath("");
       setScope("generic");
       setProjectKey("");
       if (fileRef.current) {
@@ -206,6 +212,25 @@ export default function AdminPage() {
       setStatus(`Error: ${message}`);
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleRefresh = async (item: SourceItem) => {
+    if (!item.source_path) return;
+    setStatus("Updating source...");
+    try {
+      const response = await fetch(`${API_BASE}/rag/sources/${item.id}/refresh`, {
+        method: "POST",
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Update failed: ${response.status}`);
+      }
+      setStatus("Source updated.");
+      await loadSources();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setStatus(`Error: ${message}`);
     }
   };
 
@@ -540,6 +565,9 @@ export default function AdminPage() {
                 if (file && !title.trim()) {
                   setTitle(file.name);
                 }
+                if (file && !sourcePath.trim()) {
+                  setSourcePath(file.name);
+                }
               }}
             />
             <input
@@ -569,6 +597,12 @@ export default function AdminPage() {
                 </option>
               ))}
             </select>
+            <input
+              type="text"
+              placeholder="Optional source path (server filesystem)"
+              value={sourcePath}
+              onChange={(e) => setSourcePath(e.target.value)}
+            />
             <div className="admin-agent-select">
               {AGENTS.map((agent) => (
                 <label key={agent.id} className="admin-agent-option">
@@ -640,9 +674,23 @@ export default function AdminPage() {
                                     : ""}
                               </div>
                             </div>
-                            <button className="admin-delete" onClick={() => void handleDelete(item)}>
-                              Delete
-                            </button>
+                            <div className="admin-row-actions">
+                              <button
+                                className="admin-link"
+                                onClick={() => void handleRefresh(item)}
+                                disabled={!item.source_path}
+                                title={
+                                  item.source_path
+                                    ? "Refresh from source_path"
+                                    : "Add source_path to enable update"
+                                }
+                              >
+                                Update
+                              </button>
+                              <button className="admin-delete" onClick={() => void handleDelete(item)}>
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>
@@ -670,9 +718,23 @@ export default function AdminPage() {
                                     : ""}
                               </div>
                             </div>
-                            <button className="admin-delete" onClick={() => void handleDelete(item)}>
-                              Delete
-                            </button>
+                            <div className="admin-row-actions">
+                              <button
+                                className="admin-link"
+                                onClick={() => void handleRefresh(item)}
+                                disabled={!item.source_path}
+                                title={
+                                  item.source_path
+                                    ? "Refresh from source_path"
+                                    : "Add source_path to enable update"
+                                }
+                              >
+                                Update
+                              </button>
+                              <button className="admin-delete" onClick={() => void handleDelete(item)}>
+                                Delete
+                              </button>
+                            </div>
                           </div>
                         ))}
                       </div>

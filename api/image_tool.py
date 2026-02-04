@@ -32,6 +32,19 @@ MAX_PROMPT_LEN = 1000
 MAX_IMAGES = 4
 
 
+def _shorten_prompt(prompt: str, max_len: int = MAX_PROMPT_LEN) -> str:
+    cleaned = " ".join(prompt.split())
+    if len(cleaned) <= max_len:
+        return cleaned
+    # Try to cut at a sentence boundary near the limit.
+    slice_candidate = cleaned[:max_len]
+    for separator in (". ", "; ", ", "):
+        idx = slice_candidate.rfind(separator)
+        if idx > max_len * 0.6:
+            return slice_candidate[: idx + 1].strip()
+    return slice_candidate.rstrip()
+
+
 def get_images_dir(project_key: Optional[str] = None) -> Path:
     raw = os.getenv("IMAGES_OUTPUT_DIR")
     if not raw:
@@ -193,8 +206,7 @@ def generate_image(
 ) -> dict:
     if not prompt or len(prompt.strip()) == 0:
         raise ValueError("Prompt is required.")
-    if len(prompt) > MAX_PROMPT_LEN:
-        raise ValueError("Prompt is too long.")
+    prompt = _shorten_prompt(prompt, MAX_PROMPT_LEN)
 
     width = _clamp_dimension(width)
     height = _clamp_dimension(height)
@@ -238,10 +250,10 @@ def generate_image(
         },
         "public": False,
     }
-#    if negative_prompt:
-#        base_payload["parameters"]["negative_prompt"] = negative_prompt
-#    if seed is not None:
-#        base_payload["parameters"]["seed"] = seed
+    if negative_prompt:
+        base_payload["parameters"]["negative_prompt"] = negative_prompt
+    if seed is not None:
+        base_payload["parameters"]["seed"] = seed
 
     payload = base_payload
 

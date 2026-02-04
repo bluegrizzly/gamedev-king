@@ -1,5 +1,6 @@
 import io
 import os
+from pathlib import Path
 from typing import List, Literal, Optional
 from uuid import UUID
 
@@ -196,6 +197,21 @@ def get_project_path(supabase: Client, project_key: str) -> Optional[str]:
     return None
 
 
+def get_project_display_name(supabase: Client, project_key: str) -> Optional[str]:
+    if not project_key:
+        return None
+    result = (
+        supabase.table("projects")
+        .select("display_name")
+        .eq("project_key", project_key)
+        .limit(1)
+        .execute()
+    )
+    if result.data:
+        return result.data[0].get("display_name")
+    return None
+
+
 def resolve_project_path(project_key: Optional[str]) -> Optional[str]:
     supabase = get_supabase_client()
     cleaned_key = project_key.strip() if project_key else ""
@@ -231,12 +247,22 @@ def extract_docx_text(file_bytes: bytes) -> str:
     return "\n".join(paragraphs).strip()
 
 
+def extract_text_from_file(filename: str, file_bytes: bytes) -> str:
+    lower = filename.lower()
+    if lower.endswith(".pdf"):
+        return extract_pdf_text(file_bytes)
+    if lower.endswith(".docx"):
+        return extract_docx_text(file_bytes)
+    raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+
 def upload_pdf(
     file: UploadFile = File(...),
     title: Optional[str] = Form(None),
     agent_ids: Optional[List[str]] = Form(None),
     scope: str = Form("generic"),
     project_key: Optional[str] = Form(None),
+    source_path: Optional[str] = Form(None),
 ) -> dict:
     if not file.filename:
         raise HTTPException(status_code=400, detail="A file is required.")
@@ -257,10 +283,7 @@ def upload_pdf(
     if not file_bytes:
         raise HTTPException(status_code=400, detail="Empty upload.")
 
-    if is_pdf:
-        text = extract_pdf_text(file_bytes)
-    else:
-        text = extract_docx_text(file_bytes)
+    text = extract_text_from_file(file.filename, file_bytes)
     if not text.strip():
         raise HTTPException(status_code=400, detail="No text extracted from file.")
 
@@ -310,6 +333,7 @@ def upload_pdf(
             "agent_ids": source_agents,
             "scope": cleaned_scope,
             "project_key": cleaned_project_key or None,
+            "source_path": source_path.strip() if source_path and source_path.strip() else None,
         }
         source_result = supabase.table("sources").insert(source_payload).execute()
         if not source_result.data:
@@ -369,7 +393,7 @@ def list_sources() -> list[dict]:
         supabase = get_supabase_client()
         result = (
             supabase.table("sources")
-            .select("id,title,created_at,agent_id,agent_ids,scope,project_key")
+            .select("id,title,created_at,agent_id,agent_ids,scope,project_key,source_path")
             .order("created_at", desc=True)
             .execute()
         )
@@ -389,3 +413,71 @@ def delete_source(source_id: UUID) -> dict:
         raise
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to delete source: {exc}") from exc
+
+
+def refresh_source(source_id: UUID) -> dict:
+    try:
+        supabase = get_supabase_client()
+        source_result = (
+            supabase.table("sources")
+            .select("id,title,scope,project_key,agent_id,agent_ids,source_path")
+            .eq("id", str(source_id))
+            .limit(1)
+            .execute()
+        )
+        if not source_result.data:
+            raise HTTPException(status_code=404, detail="Source not found.")
+        source = source_result.data[0]
+        source_path = source.get("source_path") or ""
+        if not source_path:
+            raise HTTPException(status_code=400, detail="source_path is missing for this source.")
+        if not os.path.exists(source_path):
+            raise HTTPException(status_code=404, detail="source_path does not exist.")
+
+        file_bytes = Path(source_path).read_bytes()
+        if not file_bytes:
+            raise HTTPException(status_code=400, detail="Source file is empty.")
+
+        text = extract_text_from_file(source_path, file_bytes)
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="No text extracted from source file.")
+
+        chunks = chunk_text(text, chunk_size=1200, overlap=200)
+        if not chunks:
+            raise HTTPException(status_code=400, detail="No chunks produced.")
+
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise HTTPException(status_code=500, detail="Missing OPENAI_API_KEY.")
+
+        openai_client = OpenAI(api_key=api_key)
+        embeddings: list[list[float]] = []
+        for i in range(0, len(chunks), EMBEDDING_BATCH_SIZE):
+            batch = chunks[i : i + EMBEDDING_BATCH_SIZE]
+            embedding_response = openai_client.embeddings.create(
+                model=EMBEDDING_MODEL,
+                input=batch,
+            )
+            embeddings.extend([item.embedding for item in embedding_response.data])
+
+        if len(embeddings) != len(chunks):
+            raise HTTPException(status_code=502, detail="Embedding count mismatch.")
+
+        supabase.table("chunks").delete().eq("source_id", str(source_id)).execute()
+        chunk_rows = [
+            {
+                "source_id": str(source_id),
+                "chunk_index": idx,
+                "content": chunk,
+                "embedding": embeddings[idx],
+                "scope": source.get("scope") or "generic",
+                "project_key": source.get("project_key"),
+            }
+            for idx, chunk in enumerate(chunks)
+        ]
+        supabase.table("chunks").insert(chunk_rows).execute()
+        return {"updated": True, "source_id": str(source_id), "chunks_indexed": len(chunks)}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to refresh source: {exc}") from exc

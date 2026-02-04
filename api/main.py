@@ -5,7 +5,7 @@ from typing import Any, AsyncGenerator, List, Literal, Optional
 from uuid import UUID
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from openai import OpenAI
@@ -22,7 +22,13 @@ from image_tool import (
 from pdf_export import run_export_pdf_tool
 from docx_export import run_export_docx_tool
 from pdf_routes import pdf_router
-from rag import get_default_project_key_value, retrieve_chunks, resolve_scope_and_project_key
+from rag import (
+    get_default_project_key_value,
+    get_supabase_client,
+    get_project_display_name,
+    retrieve_chunks,
+    resolve_scope_and_project_key,
+)
 from projects import projects_router
 from rag_routes import rag_router
 
@@ -66,6 +72,18 @@ AGENT_PERSONA_FILES = {
     "art_director": Path(__file__).parent / "personas" / "art_director.json",
 }
 AGENT_HISTORIES: dict[str, List[ChatMessage]] = {}
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+HISTORY_PREFIX = "feed_"
+MAX_HISTORY_ITEMS = 200
+
+
+class HistoryMessage(BaseModel):
+    role: str = Field(pattern="^(user|assistant|system)$")
+    content: str
+
+
+class HistoryPayload(BaseModel):
+    messages: List[HistoryMessage] = Field(default_factory=list)
 
 
 def normalize_agent_id(agent_id: Optional[str]) -> str:
@@ -73,6 +91,12 @@ def normalize_agent_id(agent_id: Optional[str]) -> str:
         return "creative_director"
     cleaned = agent_id.strip().lower().replace("-", "_").replace(" ", "_")
     return cleaned if cleaned in AGENT_PERSONA_FILES else "creative_director"
+
+
+def get_history_path(agent_id: str) -> Path:
+    safe_agent = normalize_agent_id(agent_id)
+    filename = f"{HISTORY_PREFIX}{safe_agent}.json"
+    return PROJECT_ROOT / "history" / filename
 
 
 def load_persona_text(agent_id: str) -> str:
@@ -109,6 +133,44 @@ def sse_event(event: str, data: str) -> bytes:
 def health() -> dict:
     return {"ok": True}
 
+
+@app.get("/chat/history/{agent_id}")
+def get_chat_history(agent_id: str) -> dict:
+    path = get_history_path(agent_id)
+    if not path.exists():
+        return {"messages": []}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        messages = data.get("messages", [])
+        if not isinstance(messages, list):
+            return {"messages": []}
+        return {"messages": messages[:MAX_HISTORY_ITEMS]}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to read history: {exc}") from exc
+
+
+@app.post("/chat/history/{agent_id}")
+def save_chat_history(agent_id: str, body: HistoryPayload) -> dict:
+    path = get_history_path(agent_id)
+    messages = body.messages[-MAX_HISTORY_ITEMS:]
+    payload = {"messages": [msg.model_dump() for msg in messages]}
+    try:
+        path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"saved": True, "count": len(messages)}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to write history: {exc}") from exc
+
+
+@app.delete("/chat/history/{agent_id}")
+def clear_chat_history(agent_id: str) -> dict:
+    path = get_history_path(agent_id)
+    try:
+        if path.exists():
+            path.unlink()
+        return {"deleted": True}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete history: {exc}") from exc
+
 app.include_router(rag_router)
 app.include_router(projects_router)
 app.include_router(pdf_router)
@@ -138,6 +200,22 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     "The agent represent this persona:\n"
                     f"{persona_text}"
                 )
+
+            current_project_name = "Unspecified"
+            if body.rag and body.rag.project_key:
+                supabase = get_supabase_client()
+                resolved_name = get_project_display_name(supabase, body.rag.project_key)
+                if resolved_name:
+                    current_project_name = resolved_name
+            persona_prompt = (
+                persona_prompt
+                + "\n*** PROJECT ***\nThe current game project is called "
+                + current_project_name
+                + ". And the game project key is "
+                + body.rag.project_key
+                + "."
+            )
+
 
             rag_options = body.rag or RagOptions()
             retrieved = []

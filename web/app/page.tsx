@@ -126,15 +126,21 @@ export default function HomePage() {
   const [status, setStatus] = useState<string | null>(null);
   const transcriptRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const historySaveTimers = useRef<Record<string, number>>({});
+  const [autoScroll, setAutoScroll] = useState(true);
   const messages = historyByAgent[agentId] ?? [];
   const activeAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
 
   useEffect(() => {
     const el = transcriptRef.current;
-    if (el) {
+    if (el && autoScroll) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [messages, isStreaming, agentId]);
+  }, [messages, isStreaming, agentId, autoScroll]);
+
+  useEffect(() => {
+    setAutoScroll(true);
+  }, [agentId]);
 
   const updateHistory = (targetAgent: string, updater: (prev: ChatMessage[]) => ChatMessage[]) => {
     setHistoryByAgent((prev) => ({
@@ -142,6 +148,68 @@ export default function HomePage() {
       [targetAgent]: updater(prev[targetAgent] ?? []),
     }));
   };
+
+  const loadHistory = async (targetAgent: string) => {
+    try {
+      const response = await fetch(`${API_BASE}/chat/history/${targetAgent}`);
+      if (!response.ok) {
+        throw new Error(`History load failed: ${response.status}`);
+      }
+      const data = (await response.json()) as { messages?: ChatMessage[] };
+      const messages = Array.isArray(data.messages) ? data.messages : [];
+      updateHistory(targetAgent, () =>
+        messages.map((msg) => ({
+          role: msg.role,
+          content: msg.content,
+        })),
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setStatus(`Error: ${message}`);
+    }
+  };
+
+  const saveHistory = async (targetAgent: string, nextMessages: ChatMessage[]) => {
+    const payload = {
+      messages: nextMessages.map((msg) => ({
+        role: msg.role,
+        content: msg.content,
+      })),
+    };
+    try {
+      const response = await fetch(`${API_BASE}/chat/history/${targetAgent}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) {
+        throw new Error(`History save failed: ${response.status}`);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setStatus(`Error: ${message}`);
+    }
+  };
+
+  const scheduleSave = (targetAgent: string, nextMessages: ChatMessage[]) => {
+    const existing = historySaveTimers.current[targetAgent];
+    if (existing) {
+      window.clearTimeout(existing);
+    }
+    historySaveTimers.current[targetAgent] = window.setTimeout(() => {
+      void saveHistory(targetAgent, nextMessages);
+    }, 600);
+  };
+
+  useEffect(() => {
+    void loadHistory(agentId);
+  }, [agentId]);
+
+  useEffect(() => {
+    if (messages.length > 0) {
+      scheduleSave(agentId, messages);
+    }
+  }, [messages, agentId]);
 
   const sendMessage = async () => {
     const trimmed = input.trim();
@@ -421,6 +489,23 @@ export default function HomePage() {
     setStatus(null);
   };
 
+  const clearContext = async () => {
+    setStatus("Clearing context...");
+    try {
+      const response = await fetch(`${API_BASE}/chat/history/${agentId}`, {
+        method: "DELETE",
+      });
+      if (!response.ok) {
+        throw new Error(`Clear failed: ${response.status}`);
+      }
+      updateHistory(agentId, () => []);
+      setStatus("Context cleared.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setStatus(`Error: ${message}`);
+    }
+  };
+
   const handleKeyDown: React.KeyboardEventHandler<HTMLTextAreaElement> = (e) => {
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
@@ -444,157 +529,174 @@ export default function HomePage() {
             Admin
           </Link>
         </div>
-        <div className="chat-transcript" ref={transcriptRef}>
-          {messages.length === 0 && (
-            <div className="message">
-              <div className="role">system</div>
-              <div className="bubble">Start a conversation.</div>
-            </div>
-          )}
-          {messages.map((msg, idx) => (
-            <div className="message" key={idx}>
-              <div className="role">{getRoleLabel(msg.role)}</div>
-              <div className="bubble">
-                <div>{msg.content}</div>
-                {msg.role === "assistant" && msg.sourcesUsed && msg.sourcesUsed.length > 0 && (
-                  <div className="sources-used">
-                    <div className="sources-title">Sources used</div>
-                    <div className="sources-list">
-                      {msg.sourcesUsed.map((source) => (
-                        <div className="sources-item" key={source.source_id}>
-                          <div className="sources-name">{source.title}</div>
-                          {source.chunks && source.chunks.length > 0 && (
-                            <div className="sources-meta">
-                              chunks: {source.chunks.join(", ")}
+        <div className="chat-main">
+          <div className="chat-left">
+            <div
+              className="chat-transcript"
+              ref={transcriptRef}
+              onScroll={() => {
+                const el = transcriptRef.current;
+                if (!el) return;
+                const threshold = 32;
+                const atBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - threshold;
+                setAutoScroll(atBottom);
+              }}
+            >
+              {messages.length === 0 && (
+                <div className="message">
+                  <div className="role">system</div>
+                  <div className="bubble">Start a conversation.</div>
+                </div>
+              )}
+              {messages.map((msg, idx) => (
+                <div className="message" key={idx}>
+                  <div className="role">{getRoleLabel(msg.role)}</div>
+                  <div className="bubble">
+                    <div>{msg.content}</div>
+                    {msg.role === "assistant" && msg.sourcesUsed && msg.sourcesUsed.length > 0 && (
+                      <div className="sources-used">
+                        <div className="sources-title">Sources used</div>
+                        <div className="sources-list">
+                          {msg.sourcesUsed.map((source) => (
+                            <div className="sources-item" key={source.source_id}>
+                              <div className="sources-name">{source.title}</div>
+                              {source.chunks && source.chunks.length > 0 && (
+                                <div className="sources-meta">
+                                  chunks: {source.chunks.join(", ")}
+                                </div>
+                              )}
                             </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {msg.role === "assistant" && msg.images && msg.images.length > 0 && (
+                      <div className="image-block">
+                        <div className="image-title">Images</div>
+                        <div className="image-grid">
+                          {msg.images.map((img) => {
+                            const src = img.url.startsWith("http")
+                              ? img.url
+                              : `${API_BASE}${img.url.startsWith("/") ? "" : "/"}${img.url}`;
+                            return (
+                              <div className="image-item" key={img.filename}>
+                                <img className="image-preview" src={src} alt={img.filename} />
+                                <div className="image-name">{img.filename}</div>
+                                {img.path && <div className="image-name">{img.path}</div>}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    {msg.role === "assistant" && msg.imageError && (
+                      <div className="pdf-status error">Image error: {msg.imageError}</div>
+                    )}
+                    {msg.role === "assistant" && msg.pdf?.status === "saving" && (
+                      <div className="pdf-status saving">Saving PDF...</div>
+                    )}
+                    {msg.role === "assistant" && msg.pdf?.status === "saved" && (
+                      <div className="pdf-status saved">
+                        <div>PDF saved: {msg.pdf.filename}</div>
+                        {msg.pdf.path && <div>Path: {msg.pdf.path}</div>}
+                        <div className="pdf-actions">
+                          {msg.pdf.downloadUrl && (
+                            <>
+                              <a className="pdf-link" href={msg.pdf.downloadUrl}>
+                                Download
+                              </a>
+                              <a
+                                className="pdf-link"
+                                href={msg.pdf.downloadUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            </>
                           )}
                         </div>
-                      ))}
-                    </div>
+                      </div>
+                    )}
+                    {msg.role === "assistant" && msg.pdf?.status === "error" && (
+                      <div className="pdf-status error">PDF export failed: {msg.pdf.error}</div>
+                    )}
+                    {msg.role === "assistant" && msg.docx?.status === "saving" && (
+                      <div className="pdf-status saving">Saving DOCX...</div>
+                    )}
+                    {msg.role === "assistant" && msg.docx?.status === "saved" && (
+                      <div className="pdf-status saved">
+                        <div>DOCX saved: {msg.docx.filename}</div>
+                        {msg.docx.path && <div>Path: {msg.docx.path}</div>}
+                        <div className="pdf-actions">
+                          {msg.docx.downloadUrl && (
+                            <>
+                              <a className="pdf-link" href={msg.docx.downloadUrl}>
+                                Download
+                              </a>
+                              <a
+                                className="pdf-link"
+                                href={msg.docx.downloadUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {msg.role === "assistant" && msg.docx?.status === "error" && (
+                      <div className="pdf-status error">DOCX export failed: {msg.docx.error}</div>
+                    )}
                   </div>
-                )}
-                {msg.role === "assistant" && msg.images && msg.images.length > 0 && (
-                  <div className="image-block">
-                    <div className="image-title">Images</div>
-                    <div className="image-grid">
-                      {msg.images.map((img) => {
-                        const src = img.url.startsWith("http")
-                          ? img.url
-                          : `${API_BASE}${img.url.startsWith("/") ? "" : "/"}${img.url}`;
-                        return (
-                          <div className="image-item" key={img.filename}>
-                            <img className="image-preview" src={src} alt={img.filename} />
-                            <div className="image-name">{img.filename}</div>
-                            {img.path && <div className="image-name">{img.path}</div>}
-                          </div>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-                {msg.role === "assistant" && msg.imageError && (
-                  <div className="pdf-status error">Image error: {msg.imageError}</div>
-                )}
-                {msg.role === "assistant" && msg.pdf?.status === "saving" && (
-                  <div className="pdf-status saving">Saving PDF...</div>
-                )}
-                {msg.role === "assistant" && msg.pdf?.status === "saved" && (
-                  <div className="pdf-status saved">
-                    <div>PDF saved: {msg.pdf.filename}</div>
-                    {msg.pdf.path && <div>Path: {msg.pdf.path}</div>}
-                    <div className="pdf-actions">
-                      {msg.pdf.downloadUrl && (
-                        <>
-                          <a className="pdf-link" href={msg.pdf.downloadUrl}>
-                            Download
-                          </a>
-                          <a
-                            className="pdf-link"
-                            href={msg.pdf.downloadUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open
-                          </a>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {msg.role === "assistant" && msg.pdf?.status === "error" && (
-                  <div className="pdf-status error">PDF export failed: {msg.pdf.error}</div>
-                )}
-                {msg.role === "assistant" && msg.docx?.status === "saving" && (
-                  <div className="pdf-status saving">Saving DOCX...</div>
-                )}
-                {msg.role === "assistant" && msg.docx?.status === "saved" && (
-                  <div className="pdf-status saved">
-                    <div>DOCX saved: {msg.docx.filename}</div>
-                    {msg.docx.path && <div>Path: {msg.docx.path}</div>}
-                    <div className="pdf-actions">
-                      {msg.docx.downloadUrl && (
-                        <>
-                          <a className="pdf-link" href={msg.docx.downloadUrl}>
-                            Download
-                          </a>
-                          <a
-                            className="pdf-link"
-                            href={msg.docx.downloadUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                          >
-                            Open
-                          </a>
-                        </>
-                      )}
-                    </div>
-                  </div>
-                )}
-                {msg.role === "assistant" && msg.docx?.status === "error" && (
-                  <div className="pdf-status error">DOCX export failed: {msg.docx.error}</div>
-                )}
-              </div>
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        <div className="input-row">
-          <textarea
-            placeholder="Type your message..."
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-          />
-          <button onClick={() => void sendMessage()} disabled={isStreaming}>
-            Send
-          </button>
-          <button
-            className="stop-button"
-            onClick={stopStreaming}
-            disabled={!isStreaming}
-          >
-            Stop
-          </button>
-        </div>
-        <div className="status">
-          {status ? status : isStreaming ? "Assistant is typing..." : ""}
-        </div>
-        <div className="agent-list-title">Agents</div>
-        <div className="agent-list">
-          {AGENTS.map((agent) => (
-            <button
-              key={agent.id}
-              type="button"
-              className={`agent-card ${agentId === agent.id ? "active" : ""}`}
-              onClick={() => setAgentId(agent.id)}
-              disabled={isStreaming && agentId === agent.id}
-            >
-              <img className="agent-avatar" src={agent.image} alt={agent.name} />
-              <div className="agent-meta">
-                <div className="agent-name">{agent.name}</div>
-                <div className="agent-role">{agent.role}</div>
-              </div>
-            </button>
-          ))}
+            <div className="input-row">
+              <textarea
+                placeholder="Type your message..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyDown={handleKeyDown}
+              />
+              <button onClick={() => void sendMessage()} disabled={isStreaming}>
+                Send
+              </button>
+              <button className="stop-button" onClick={stopStreaming} disabled={!isStreaming}>
+                Stop
+              </button>
+            </div>
+            <div className="status">
+              {status ? status : isStreaming ? "Assistant is typing..." : ""}
+            </div>
+            <div className="input-row">
+              <button type="button" onClick={() => void clearContext()} disabled={isStreaming}>
+                Clear Context
+              </button>
+            </div>
+          </div>
+          <div className="chat-right">
+            <div className="agent-list-title">Agents</div>
+            <div className="agent-list">
+              {AGENTS.map((agent) => (
+                <button
+                  key={agent.id}
+                  type="button"
+                  className={`agent-card ${agentId === agent.id ? "active" : ""}`}
+                  onClick={() => setAgentId(agent.id)}
+                  disabled={isStreaming && agentId === agent.id}
+                >
+                  <img className="agent-avatar" src={agent.image} alt={agent.name} />
+                  <div className="agent-meta">
+                    <div className="agent-name">{agent.name}</div>
+                    <div className="agent-role">{agent.role}</div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </main>

@@ -1,7 +1,15 @@
 from fastapi import APIRouter, File, Form, UploadFile
 from uuid import UUID
 
-from rag import RetrieveRequest, RetrieveResponse, delete_source, list_sources, retrieve, upload_pdf
+from rag import (
+    RetrieveRequest,
+    RetrieveResponse,
+    delete_source,
+    list_sources,
+    refresh_source,
+    retrieve,
+    upload_pdf,
+)
 
 rag_router = APIRouter()
 
@@ -13,6 +21,7 @@ def upload_pdf_route(
     agent_ids: list[str] | None = Form(None),
     scope: str = Form("generic"),
     project_key: str | None = Form(None),
+    source_path: str | None = Form(None),
 ) -> dict:
     return upload_pdf(
         file=file,
@@ -20,6 +29,7 @@ def upload_pdf_route(
         agent_ids=agent_ids,
         scope=scope,
         project_key=project_key,
+        source_path=source_path,
     )
 
 
@@ -36,3 +46,8 @@ def list_sources_route() -> list[dict]:
 @rag_router.delete("/rag/sources/{source_id}")
 def delete_source_route(source_id: UUID) -> dict:
     return delete_source(source_id)
+
+
+@rag_router.post("/rag/sources/{source_id}/refresh")
+def refresh_source_route(source_id: UUID) -> dict:
+    return refresh_source(source_id)
