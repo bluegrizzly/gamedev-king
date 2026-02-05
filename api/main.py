@@ -79,6 +79,24 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 HISTORY_PREFIX = "feed_"
 MAX_HISTORY_ITEMS = 200
 
+# Keywords that suggest the user might want export or image tools (for tool_choice optimization).
+_TOOL_TRIGGER_PHRASES = (
+    "export", "save to pdf", "save as pdf", "save to docx", "save as docx",
+    "export to pdf", "export to docx", "export as pdf", "export as docx",
+    "generate image", "generate a image", "create image", "create a image",
+    "draw ", "draw a", "picture of", "image of", "generate a picture",
+    "resize image", "crop image", "convert image", "resize the image",
+    "make a pdf", "make a docx", "write to pdf", "write to docx",
+)
+
+
+def _user_might_need_tools(user_message: str) -> bool:
+    """Return True if the user message suggests they may want export or image tools."""
+    if not user_message or not user_message.strip():
+        return False
+    lower = user_message.strip().lower()
+    return any(phrase in lower for phrase in _TOOL_TRIGGER_PHRASES)
+
 
 class HistoryMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant|system)$")
@@ -330,18 +348,24 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             max_tool_iterations = 3
             tool_iterations = 0
             pending_messages = list(input_messages)
+            user_text_for_tools = body.message.strip() if body.message else (last_user.content.strip() if last_user else "")
+            use_tools_this_turn = _user_might_need_tools(user_text_for_tools)
 
             while tool_iterations < max_tool_iterations:
                 assistant_chunks: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
+                include_tools = use_tools_this_turn or tool_iterations > 0
 
-                stream = client.chat.completions.create(
-                    model=body.model or "gpt-5-mini",
-                    messages=pending_messages,
-                    tools=get_tools(),
-                    tool_choice="auto",
-                    stream=True,
-                )
+                create_kwargs: dict[str, Any] = {
+                    "model": body.model or "gpt-5-mini",
+                    "messages": pending_messages,
+                    "stream": True,
+                }
+                if include_tools:
+                    create_kwargs["tools"] = get_tools()
+                    create_kwargs["tool_choice"] = "auto"
+
+                stream = client.chat.completions.create(**create_kwargs)
                 tool_call_map: dict[int, dict[str, Any]] = {}
                 for chunk in stream:
                     choice = chunk.choices[0]

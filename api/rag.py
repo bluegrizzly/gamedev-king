@@ -13,7 +13,7 @@ from supabase import Client, create_client
 
 EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_TOP_K = 20
-DEFAULT_TOP_K = 6
+DEFAULT_TOP_K = 10
 EMBEDDING_BATCH_SIZE = 50
 VALID_SCOPES = ("generic", "project", "hybrid")
 
