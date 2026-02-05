@@ -210,3 +210,6 @@ web/node_modules
 
 # User 
 api/output/*
+history/
+api/env
+.DS_Store

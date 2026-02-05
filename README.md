@@ -19,8 +19,8 @@ cd api
 uv venv
 .\.venv\Scripts\activate
 uv pip install -r requirements.txt
-copy .env.example .env
-# add your OpenAI key in api/.env
+cp .env.example env   # or on Windows: copy .env.example env
+# add your OpenAI key in api/env
 ```
 
 Run:

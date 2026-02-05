@@ -1,5 +1,6 @@
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, AsyncGenerator, List, Literal, Optional
 from uuid import UUID
@@ -32,7 +33,8 @@ from rag import (
 from projects import projects_router
 from rag_routes import rag_router
 
-load_dotenv()
+_env_file = ".env" if sys.platform == "win32" else "env"
+load_dotenv(Path(__file__).parent / _env_file)
 
 app = FastAPI()
 
@@ -152,6 +154,7 @@ def get_chat_history(agent_id: str) -> dict:
 @app.post("/chat/history/{agent_id}")
 def save_chat_history(agent_id: str, body: HistoryPayload) -> dict:
     path = get_history_path(agent_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
     messages = body.messages[-MAX_HISTORY_ITEMS:]
     payload = {"messages": [msg.model_dump() for msg in messages]}
     try:
@@ -202,18 +205,18 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 )
 
             current_project_name = "Unspecified"
+            project_key_for_prompt = ""
             if body.rag and body.rag.project_key:
                 supabase = get_supabase_client()
                 resolved_name = get_project_display_name(supabase, body.rag.project_key)
                 if resolved_name:
                     current_project_name = resolved_name
+                project_key_for_prompt = body.rag.project_key
             persona_prompt = (
                 persona_prompt
                 + "\n*** PROJECT ***\nThe current game project is called "
                 + current_project_name
-                + ". And the game project key is "
-                + body.rag.project_key
-                + "."
+                + ("." if not project_key_for_prompt else f". And the game project key is {project_key_for_prompt}.")
             )
 
 
