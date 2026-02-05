@@ -6,10 +6,13 @@
     "configurations": [
         {
             "name": "Python Debugger: FastAPI",
-            "cwd": "${workspaceFolder}\\api",
+            "cwd": "${workspaceFolder}/api",
             "type": "debugpy",
             "request": "launch",
-            "python": "d:\\AndyFire\\GitHub\\gamedev-king\\api\\.venv\\Scripts\\python.exe",
+            "python": "${workspaceFolder}/api/.venv/Scripts/python",
+            "osx": {
+                "python": "${workspaceFolder}/api/.venv/bin/python"
+            },
             "module": "uvicorn",
             "args": [
                 "main:app",

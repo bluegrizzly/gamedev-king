@@ -601,6 +601,18 @@ button:disabled {
   gap: 12px;
 }
 
+.admin-test-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: #e6e6e6;
+}
+
+.admin-test-toggle input {
+  accent-color: #3b82f6;
+}
+
 .admin-test-status {
   font-size: 13px;
   padding: 10px 12px;

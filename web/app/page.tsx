@@ -237,13 +237,16 @@ export default function HomePage() {
     abortRef.current = controller;
     try {
       const storedProjectKey = window.localStorage.getItem("activeProjectKey");
+      const debugPrompts = window.localStorage.getItem("debugPrompts") === "true";
       const payload: Record<string, unknown> = {
         agent: targetAgent,
         message: trimmed,
+        rag: {
+          scope: "hybrid",
+          project_key: storedProjectKey || undefined,
+        },
+        debug_prompts: debugPrompts || undefined,
       };
-      if (storedProjectKey) {
-        payload.rag = { project_key: storedProjectKey, scope: "hybrid" };
-      }
       const response = await fetch("http://localhost:8000/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },

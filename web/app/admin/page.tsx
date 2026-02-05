@@ -80,6 +80,15 @@ export default function AdminPage() {
     message?: string;
     data?: ToolPathsResponse;
   }>({ state: "idle" });
+  const [debugPrompts, setDebugPrompts] = useState(false);
+  const [ragTestStatus, setRagTestStatus] = useState<{
+    state: "idle" | "success" | "error";
+    message?: string;
+    currentProject?: string;
+    currentAgent?: string;
+    currentProjectSources?: SourceItem[];
+    otherSources?: SourceItem[];
+  }>({ state: "idle" });
   const [showTests, setShowTests] = useState(false);
 
   const loadSources = async () => {
@@ -122,6 +131,10 @@ export default function AdminPage() {
     const stored = window.localStorage.getItem("activeProjectKey");
     if (stored) {
       setActiveProjectKey(stored);
+    }
+    const debugStored = window.localStorage.getItem("debugPrompts");
+    if (debugStored === "true") {
+      setDebugPrompts(true);
     }
     void loadSources();
     void loadProjects();
@@ -428,6 +441,58 @@ export default function AdminPage() {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Unknown error";
       setPathsStatus({ state: "error", message });
+    }
+  };
+
+  const toggleDebugPrompts = (checked: boolean) => {
+    setDebugPrompts(checked);
+    window.localStorage.setItem("debugPrompts", checked ? "true" : "false");
+  };
+
+  const runRagSourcesTest = async () => {
+    setRagTestStatus({ state: "idle" });
+    const selectedAgent = agentIds[0] || AGENTS[0]?.id || "";
+    const currentProject = activeProjectKey || "";
+    if (!selectedAgent) {
+      setRagTestStatus({ state: "error", message: "No agent selected." });
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE}/rag/sources`);
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Load failed: ${response.status}`);
+      }
+      const data = (await response.json()) as SourceItem[];
+      const matchesAgent = (item: SourceItem) =>
+        (item.agent_ids && item.agent_ids.includes(selectedAgent)) ||
+        item.agent_id === selectedAgent;
+
+      const currentProjectSources = data.filter(
+        (item) =>
+          matchesAgent(item) &&
+          item.scope === "project" &&
+          !!currentProject &&
+          item.project_key === currentProject,
+      );
+      const otherSources = data.filter((item) => {
+        if (!matchesAgent(item)) return false;
+        if (item.scope === "project" && currentProject) {
+          return item.project_key !== currentProject;
+        }
+        return item.scope !== "project";
+      });
+
+      setRagTestStatus({
+        state: "success",
+        currentProject,
+        currentAgent: selectedAgent,
+        currentProjectSources,
+        otherSources,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setRagTestStatus({ state: "error", message });
     }
   };
 
@@ -754,7 +819,16 @@ export default function AdminPage() {
                 {isTesting ? "Running..." : "Run PDF Export Test"}
               </button>
               <button onClick={() => void runPathsTest()}>Show Paths</button>
+              <button onClick={() => void runRagSourcesTest()}>Run RAG Sources Test</button>
             </div>
+            <label className="admin-test-toggle">
+              <input
+                type="checkbox"
+                checked={debugPrompts}
+                onChange={(e) => toggleDebugPrompts(e.target.checked)}
+              />
+              Debug Prompts
+            </label>
             {testStatus.state === "success" && (
               <div className="admin-test-status success">
                 <div>{testStatus.message}</div>
@@ -798,6 +872,36 @@ export default function AdminPage() {
             )}
             {pathsStatus.state === "error" && (
               <div className="admin-test-status error">Error: {pathsStatus.message}</div>
+            )}
+            {ragTestStatus.state === "success" && (
+              <div className="admin-test-status">
+                <div className="admin-test-meta">
+                  Agent: {ragTestStatus.currentAgent || "-"}
+                </div>
+                <div className="admin-test-meta">
+                  Project: {ragTestStatus.currentProject || "(none)"}
+                </div>
+                <div className="admin-test-meta">
+                  Current project docs:{" "}
+                  {ragTestStatus.currentProjectSources?.length ?? 0}
+                </div>
+                {(ragTestStatus.currentProjectSources ?? []).map((item) => (
+                  <div key={item.id} className="admin-test-meta">
+                    - {item.title}
+                  </div>
+                ))}
+                <div className="admin-test-meta">
+                  Other docs for agent: {ragTestStatus.otherSources?.length ?? 0}
+                </div>
+                {(ragTestStatus.otherSources ?? []).map((item) => (
+                  <div key={item.id} className="admin-test-meta">
+                    - {item.title}
+                  </div>
+                ))}
+              </div>
+            )}
+            {ragTestStatus.state === "error" && (
+              <div className="admin-test-status error">Error: {ragTestStatus.message}</div>
             )}
           </div>
         )}

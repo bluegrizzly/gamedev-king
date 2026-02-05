@@ -67,6 +67,7 @@ class ChatRequest(BaseModel):
     agent: Optional[str] = "creative_director"
     model: Optional[str] = "gpt-5-mini"
     rag: Optional[RagOptions] = None
+    debug_prompts: Optional[bool] = False
 
 
 AGENT_PERSONA_FILES = {
@@ -313,6 +314,18 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             if context_block:
                 system_messages.append({"role": "system", "content": context_block})
             input_messages: list[dict[str, Any]] = [*system_messages, *base_messages]
+            if body.debug_prompts:
+                separator = "=" * 80
+                user_text = body.message.strip() if body.message else (last_user.content if last_user else "")
+                log_lines = [
+                    separator,
+                    f"User: {user_text}",
+                    "Prompt:",
+                    *[msg.get("content", "") for msg in system_messages],
+                ]
+                log_path = PROJECT_ROOT / "debug_prompts.txt"
+                with log_path.open("a", encoding="utf-8") as handle:
+                    handle.write("\n".join(log_lines) + "\n")
 
             max_tool_iterations = 3
             tool_iterations = 0
