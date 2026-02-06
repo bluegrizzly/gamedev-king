@@ -57,7 +57,6 @@ cover/
 
 # Django stuff:
 *.log
-local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
@@ -210,7 +209,6 @@ web/node_modules
 
 # User 
 api/output/*
-history/
 api/env
 .DS_Store
 debug_prompts.txt
