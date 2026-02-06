@@ -10,7 +10,8 @@ from typing import Iterable, Optional
 import requests
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-from rag import resolve_project_path
+from rag import require_project_path, resolve_project_path
+from local_settings import load_image_defaults
 
 MAX_FILENAME_LEN = 120
 ALLOWED_FILENAME_RE = re.compile(r"[^a-zA-Z0-9._-]+")
@@ -48,10 +49,10 @@ def _shorten_prompt(prompt: str, max_len: int = MAX_PROMPT_LEN) -> str:
 def get_images_dir(project_key: Optional[str] = None) -> Path:
     raw = os.getenv("IMAGES_OUTPUT_DIR")
     if not raw:
-        project_dir = resolve_project_path(project_key)
+        project_dir = require_project_path(project_key) if project_key else resolve_project_path(project_key)
         raw = str(Path(project_dir) / "Images") if project_dir else "./output/images"
     elif not Path(raw).is_absolute():
-        project_dir = resolve_project_path(project_key)
+        project_dir = require_project_path(project_key) if project_key else resolve_project_path(project_key)
         if project_dir:
             raw = str(Path(project_dir) / raw)
     output_dir = Path(os.path.expandvars(raw)).expanduser()
@@ -434,12 +435,17 @@ def convert_image(
 
 
 def run_generate_image_tool(args: dict) -> dict:
+    defaults = load_image_defaults()
+    prompt = str(args.get("prompt", "")).strip()
+    style = str(defaults.get("style", "")).strip()
+    if style and "style" not in prompt.lower():
+        prompt = f"{prompt} Style: {style}."
     return generate_image(
-        prompt=str(args.get("prompt", "")).strip(),
+        prompt=prompt,
         negative_prompt=args.get("negative_prompt"),
-        width=int(args.get("width", 1024)),
-        height=int(args.get("height", 1024)),
-        num_images=int(args.get("num_images", 1)),
+        width=int(args.get("width", defaults.get("width", 1024))),
+        height=int(args.get("height", defaults.get("height", 1024))),
+        num_images=int(args.get("num_images", defaults.get("num_images", 1))),
         seed=args.get("seed"),
         model=args.get("model", "gemini-image-2"),
         project_key=str(args.get("project_key", "")).strip() or None,

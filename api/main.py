@@ -1,5 +1,8 @@
 import json
 import os
+import re
+import traceback
+from datetime import datetime, timezone
 import sys
 from pathlib import Path
 from typing import Any, AsyncGenerator, List, Literal, Optional
@@ -32,6 +35,7 @@ from rag import (
 )
 from projects import projects_router
 from rag_routes import rag_router
+from local_settings import DEFAULT_IMAGE_SETTINGS, load_image_defaults, save_image_defaults
 
 _env_file = ".env" if sys.platform == "win32" else "env"
 load_dotenv(Path(__file__).parent / _env_file)
@@ -76,6 +80,8 @@ AGENT_PERSONA_FILES = {
 }
 AGENT_HISTORIES: dict[str, List[ChatMessage]] = {}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+LOCAL_DATA_DIR = PROJECT_ROOT / ".local_data"
+DEBUG_PROMPTS_PATH = LOCAL_DATA_DIR / "debug_prompts.txt"
 HISTORY_PREFIX = "feed_"
 MAX_HISTORY_ITEMS = 200
 
@@ -83,6 +89,7 @@ MAX_HISTORY_ITEMS = 200
 _TOOL_TRIGGER_PHRASES = (
     "export", "save to pdf", "save as pdf", "save to docx", "save as docx",
     "export to pdf", "export to docx", "export as pdf", "export as docx",
+    "google doc", "google docs",
     "generate image", "generate a image", "create image", "create a image",
     "draw ", "draw a", "picture of", "image of", "generate a picture",
     "resize image", "crop image", "convert image", "resize the image",
@@ -98,6 +105,39 @@ def _user_might_need_tools(user_message: str) -> bool:
     return any(phrase in lower for phrase in _TOOL_TRIGGER_PHRASES)
 
 
+def _choose_tool_name(user_message: str) -> Optional[str]:
+    if not user_message:
+        return None
+    lower = user_message.strip().lower()
+    if "resize" in lower:
+        return "resize_image"
+    if "crop" in lower:
+        return "crop_image"
+    if "convert" in lower:
+        return "convert_image"
+    if "docx" in lower or "word" in lower:
+        return "export_docx"
+    if "pdf" in lower:
+        return "export_pdf"
+    if "image" in lower or "draw" in lower or "picture" in lower:
+        return "generate_image"
+    return None
+
+
+def _extract_tool_args(text: str, tool_name: str) -> Optional[dict]:
+    if not text:
+        return None
+    pattern = rf"{tool_name}\s*\(\s*(\{{.*\}})\s*\)"
+    match = re.search(pattern, text, re.DOTALL)
+    if not match:
+        return None
+    raw = match.group(1)
+    try:
+        return json.loads(raw)
+    except Exception:
+        return None
+
+
 class HistoryMessage(BaseModel):
     role: str = Field(pattern="^(user|assistant|system)$")
     content: str
@@ -105,6 +145,13 @@ class HistoryMessage(BaseModel):
 
 class HistoryPayload(BaseModel):
     messages: List[HistoryMessage] = Field(default_factory=list)
+
+
+class ImageDefaults(BaseModel):
+    num_images: Optional[int] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    style: Optional[str] = None
 
 
 def normalize_agent_id(agent_id: Optional[str]) -> str:
@@ -117,7 +164,7 @@ def normalize_agent_id(agent_id: Optional[str]) -> str:
 def get_history_path(agent_id: str) -> Path:
     safe_agent = normalize_agent_id(agent_id)
     filename = f"{HISTORY_PREFIX}{safe_agent}.json"
-    return PROJECT_ROOT / "history" / filename
+    return LOCAL_DATA_DIR / "history" / filename
 
 
 def load_persona_text(agent_id: str) -> str:
@@ -148,6 +195,17 @@ def sse_event(event: str, data: str) -> bytes:
     lines = data.split("\n")
     payload = "".join([f"event: {event}\n"] + [f"data: {line}\n" for line in lines] + ["\n"])
     return payload.encode("utf-8")
+
+
+def log_debug_error(title: str, details: str) -> None:
+    try:
+        separator = "=" * 80
+        timestamp = datetime.now().isoformat()
+        DEBUG_PROMPTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with DEBUG_PROMPTS_PATH.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join([separator, f"Timestamp: {timestamp}", title, details]) + "\n")
+    except Exception:
+        pass
 
 
 @app.get("/health")
@@ -192,6 +250,25 @@ def clear_chat_history(agent_id: str) -> dict:
         return {"deleted": True}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to delete history: {exc}") from exc
+
+
+@app.get("/settings/image_defaults")
+def get_image_defaults() -> dict:
+    return load_image_defaults()
+
+
+@app.put("/settings/image_defaults")
+def update_image_defaults(body: ImageDefaults) -> dict:
+    payload = body.model_dump(exclude_none=True)
+    if "num_images" in payload:
+        payload["num_images"] = max(1, min(int(payload["num_images"]), 4))
+    if "width" in payload:
+        payload["width"] = int(payload["width"])
+    if "height" in payload:
+        payload["height"] = int(payload["height"])
+    if "style" in payload:
+        payload["style"] = str(payload["style"]).strip()
+    return save_image_defaults(payload)
 
 app.include_router(rag_router)
 app.include_router(projects_router)
@@ -334,15 +411,17 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             input_messages: list[dict[str, Any]] = [*system_messages, *base_messages]
             if body.debug_prompts:
                 separator = "=" * 80
+                timestamp = datetime.now().isoformat()
                 user_text = body.message.strip() if body.message else (last_user.content if last_user else "")
                 log_lines = [
                     separator,
+                    f"Timestamp: {timestamp}",
                     f"User: {user_text}",
                     "Prompt:",
                     *[msg.get("content", "") for msg in system_messages],
                 ]
-                log_path = PROJECT_ROOT / "debug_prompts.txt"
-                with log_path.open("a", encoding="utf-8") as handle:
+                DEBUG_PROMPTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                with DEBUG_PROMPTS_PATH.open("a", encoding="utf-8") as handle:
                     handle.write("\n".join(log_lines) + "\n")
 
             max_tool_iterations = 3
@@ -350,11 +429,12 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
             pending_messages = list(input_messages)
             user_text_for_tools = body.message.strip() if body.message else (last_user.content.strip() if last_user else "")
             use_tools_this_turn = _user_might_need_tools(user_text_for_tools)
+            forced_tool_name = _choose_tool_name(user_text_for_tools)
 
             while tool_iterations < max_tool_iterations:
                 assistant_chunks: list[str] = []
                 tool_calls: list[dict[str, Any]] = []
-                include_tools = use_tools_this_turn or tool_iterations > 0
+                include_tools = use_tools_this_turn or tool_iterations > 0 or forced_tool_name is not None
 
                 create_kwargs: dict[str, Any] = {
                     "model": body.model or "gpt-5-mini",
@@ -363,7 +443,10 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 }
                 if include_tools:
                     create_kwargs["tools"] = get_tools()
-                    create_kwargs["tool_choice"] = "auto"
+                    if forced_tool_name:
+                        create_kwargs["tool_choice"] = {"type": "function", "function": {"name": forced_tool_name}}
+                    else:
+                        create_kwargs["tool_choice"] = "required" if use_tools_this_turn else "auto"
 
                 stream = client.chat.completions.create(**create_kwargs)
                 tool_call_map: dict[int, dict[str, Any]] = {}
@@ -400,6 +483,34 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                     history.append(ChatMessage(role="assistant", content=assistant_text))
 
                 if not tool_calls:
+                    if include_tools and forced_tool_name:
+                        extracted = _extract_tool_args(assistant_text, forced_tool_name)
+                        if extracted:
+                            try:
+                                if tool_project_key and not extracted.get("project_key"):
+                                    extracted["project_key"] = tool_project_key
+                                if forced_tool_name == "generate_image":
+                                    result = run_generate_image_tool(extracted)
+                                    yield sse_event("image_generated", json.dumps(result))
+                                elif forced_tool_name == "export_docx":
+                                    result = run_export_docx_tool(extracted)
+                                    yield sse_event("docx_saved", json.dumps(result))
+                                elif forced_tool_name == "export_pdf":
+                                    result = run_export_pdf_tool(extracted)
+                                    yield sse_event("pdf_saved", json.dumps(result))
+                            except Exception as exc:
+                                log_debug_error(
+                                    f"[tool_error] {forced_tool_name}",
+                                    "\n".join(
+                                        [
+                                            f"Args: {json.dumps(extracted, ensure_ascii=False)}",
+                                            f"Error: {exc}",
+                                            traceback.format_exc(),
+                                        ]
+                                    ),
+                                )
+                                yield sse_event("error", str(exc))
+                        break
                     break
 
                 tool_iterations += 1
@@ -483,6 +594,16 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                         yield sse_event(event_name, json.dumps(event_payload))
                         tool_content = json.dumps(result)
                     except Exception as exc:
+                        log_debug_error(
+                            f"[tool_error] {tool_name or 'unknown'}",
+                            "\n".join(
+                                [
+                                    f"Args: {raw_args}",
+                                    f"Error: {exc}",
+                                    traceback.format_exc(),
+                                ]
+                            ),
+                        )
                         error_payload = {"error": str(exc)}
                         event_name = allowed_tools.get(tool_name, "error")
                         if event_name == "image_updated":

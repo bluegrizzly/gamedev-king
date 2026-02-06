@@ -67,6 +67,8 @@ export default function AdminPage() {
     display_name: "",
     project_path: "",
   });
+  const projectPathPickerRef = useRef<HTMLInputElement>(null);
+  const editPathPickerRef = useRef<HTMLInputElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [testStatus, setTestStatus] = useState<{
@@ -81,6 +83,13 @@ export default function AdminPage() {
     data?: ToolPathsResponse;
   }>({ state: "idle" });
   const [debugPrompts, setDebugPrompts] = useState(false);
+  const [imageDefaults, setImageDefaults] = useState({
+    num_images: 2,
+    width: 720,
+    height: 1280,
+    style: "high resolution cartoon, movie style",
+  });
+  const [imageDefaultsStatus, setImageDefaultsStatus] = useState<string | null>(null);
   const [ragTestStatus, setRagTestStatus] = useState<{
     state: "idle" | "success" | "error";
     message?: string;
@@ -90,6 +99,7 @@ export default function AdminPage() {
     otherSources?: SourceItem[];
   }>({ state: "idle" });
   const [showTests, setShowTests] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
 
   const loadSources = async () => {
     setIsLoading(true);
@@ -127,6 +137,29 @@ export default function AdminPage() {
     }
   };
 
+  const loadImageDefaults = async () => {
+    setImageDefaultsStatus(null);
+    try {
+      const response = await fetch(`${API_BASE}/settings/image_defaults`);
+      if (!response.ok) {
+        throw new Error(`Load failed: ${response.status}`);
+      }
+      const data = (await response.json()) as {
+        num_images?: number;
+        width?: number;
+        height?: number;
+        style?: string;
+      };
+      setImageDefaults((prev) => ({
+        ...prev,
+        ...data,
+      }));
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setImageDefaultsStatus(`Error: ${message}`);
+    }
+  };
+
   useEffect(() => {
     const stored = window.localStorage.getItem("activeProjectKey");
     if (stored) {
@@ -138,6 +171,7 @@ export default function AdminPage() {
     }
     void loadSources();
     void loadProjects();
+    void loadImageDefaults();
   }, []);
 
   useEffect(() => {
@@ -496,6 +530,40 @@ export default function AdminPage() {
     }
   };
 
+  const saveImageDefaults = async () => {
+    setImageDefaultsStatus("Saving...");
+    try {
+      const response = await fetch(`${API_BASE}/settings/image_defaults`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          num_images: imageDefaults.num_images,
+          width: imageDefaults.width,
+          height: imageDefaults.height,
+          style: imageDefaults.style,
+        }),
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || `Save failed: ${response.status}`);
+      }
+      const data = (await response.json()) as {
+        num_images?: number;
+        width?: number;
+        height?: number;
+        style?: string;
+      };
+      setImageDefaults((prev) => ({
+        ...prev,
+        ...data,
+      }));
+      setImageDefaultsStatus("Saved.");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Unknown error";
+      setImageDefaultsStatus(`Error: ${message}`);
+    }
+  };
+
   return (
     <main>
       <div className="admin-shell">
@@ -508,6 +576,9 @@ export default function AdminPage() {
           </div>
           <button className="admin-link" onClick={() => setShowTests((prev) => !prev)}>
             Tests
+          </button>
+          <button className="admin-link" onClick={() => setShowSettings((prev) => !prev)}>
+            Settings
           </button>
         </div>
 
@@ -536,24 +607,76 @@ export default function AdminPage() {
             )}
           </div>
           <div className="admin-project-form">
-            <input
-              type="text"
-              placeholder="Display name"
-              value={newProject.display_name}
-              onChange={(e) => setNewProject((prev) => ({ ...prev, display_name: e.target.value }))}
-            />
-            <input
-              type="text"
-              placeholder="Project key (e.g. mygame)"
-              value={newProject.project_key}
-              onChange={(e) => setNewProject((prev) => ({ ...prev, project_key: e.target.value }))}
-            />
-            <input
-              type="text"
-              placeholder="Project path"
-              value={newProject.project_path}
-              onChange={(e) => setNewProject((prev) => ({ ...prev, project_path: e.target.value }))}
-            />
+            <label className="admin-field">
+              <span>Project name</span>
+              <input
+                type="text"
+                placeholder="Display name"
+                value={newProject.display_name}
+                onChange={(e) => setNewProject((prev) => ({ ...prev, display_name: e.target.value }))}
+              />
+            </label>
+            <label className="admin-field">
+              <span>Project key</span>
+              <input
+                type="text"
+                placeholder="Project key (e.g. mygame)"
+                value={newProject.project_key}
+                onChange={(e) => setNewProject((prev) => ({ ...prev, project_key: e.target.value }))}
+              />
+            </label>
+            <label className="admin-field admin-field-path">
+              <span>Project root path</span>
+              <div className="admin-path-input">
+                <input
+                  type="text"
+                  placeholder="Project path"
+                  value={newProject.project_path}
+                  onChange={(e) =>
+                    setNewProject((prev) => ({ ...prev, project_path: e.target.value }))
+                  }
+                />
+                <button
+                  type="button"
+                  className="admin-link"
+                  onClick={async () => {
+                    if ("showDirectoryPicker" in window) {
+                      try {
+                        // @ts-expect-error - showDirectoryPicker not in TS lib yet.
+                        const handle = await window.showDirectoryPicker();
+                        if (handle?.name) {
+                          setNewProject((prev) => ({ ...prev, project_path: handle.name }));
+                          return;
+                        }
+                      } catch {
+                        return;
+                      }
+                    }
+                    projectPathPickerRef.current?.click();
+                  }}
+                >
+                  ...
+                </button>
+              </div>
+              <input
+                ref={projectPathPickerRef}
+                type="file"
+                className="admin-hidden-input"
+                webkitdirectory="true"
+                directory="true"
+                onChange={(e) => {
+                  const files = e.target.files;
+                  if (!files || files.length === 0) return;
+                  const first = files[0];
+                  const relative = (first as File).webkitRelativePath || first.name;
+                  const rootFolder = relative.split("/")[0] || "";
+                  if (rootFolder) {
+                    setNewProject((prev) => ({ ...prev, project_path: rootFolder }));
+                  }
+                  e.currentTarget.value = "";
+                }}
+              />
+            </label>
             <button onClick={() => void handleProjectSave()} disabled={isProjectsLoading}>
               Add Project
             </button>
@@ -573,25 +696,81 @@ export default function AdminPage() {
                       <div className="admin-project-title">{project.display_name}</div>
                       <div className="admin-project-meta">
                         <span className="admin-project-key">{project.project_key}</span> ·{" "}
-                        {project.project_path}
+                        {project.project_path || "Path not set"}
+                        {!project.project_path && (
+                          <>
+                            {" · "}
+                            <span className="admin-path-missing">Path not set</span>
+                          </>
+                        )}
                       </div>
                     </div>
                     {isEditing ? (
                       <div className="admin-project-edit">
-                        <input
-                          type="text"
-                          value={editProject.display_name}
-                          onChange={(e) =>
-                            setEditProject((prev) => ({ ...prev, display_name: e.target.value }))
-                          }
-                        />
-                        <input
-                          type="text"
-                          value={editProject.project_path}
-                          onChange={(e) =>
-                            setEditProject((prev) => ({ ...prev, project_path: e.target.value }))
-                          }
-                        />
+                        <label className="admin-field">
+                          <span>Project name</span>
+                          <input
+                            type="text"
+                            value={editProject.display_name}
+                            onChange={(e) =>
+                              setEditProject((prev) => ({ ...prev, display_name: e.target.value }))
+                            }
+                          />
+                        </label>
+                        <label className="admin-field admin-field-path">
+                          <span>Project root path</span>
+                          <div className="admin-path-input">
+                            <input
+                              type="text"
+                              value={editProject.project_path}
+                              onChange={(e) =>
+                                setEditProject((prev) => ({
+                                  ...prev,
+                                  project_path: e.target.value,
+                                }))
+                              }
+                            />
+                            <button
+                              type="button"
+                              className="admin-link"
+                              onClick={async () => {
+                                if ("showDirectoryPicker" in window) {
+                                  try {
+                                    // @ts-expect-error - showDirectoryPicker not in TS lib yet.
+                                    const handle = await window.showDirectoryPicker();
+                                    if (handle?.name) {
+                                      setEditProject((prev) => ({ ...prev, project_path: handle.name }));
+                                      return;
+                                    }
+                                  } catch {
+                                    return;
+                                  }
+                                }
+                                editPathPickerRef.current?.click();
+                              }}
+                            >
+                              ...
+                            </button>
+                          </div>
+                          <input
+                            ref={editPathPickerRef}
+                            type="file"
+                            className="admin-hidden-input"
+                            webkitdirectory="true"
+                            directory="true"
+                            onChange={(e) => {
+                              const files = e.target.files;
+                              if (!files || files.length === 0) return;
+                              const first = files[0];
+                              const relative = (first as File).webkitRelativePath || first.name;
+                              const rootFolder = relative.split("/")[0] || "";
+                              if (rootFolder) {
+                                setEditProject((prev) => ({ ...prev, project_path: rootFolder }));
+                              }
+                              e.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
                         <button onClick={() => void handleProjectUpdate()}>Save</button>
                         <button
                           className="admin-link"
@@ -903,6 +1082,73 @@ export default function AdminPage() {
             {ragTestStatus.state === "error" && (
               <div className="admin-test-status error">Error: {ragTestStatus.message}</div>
             )}
+          </div>
+        )}
+
+        {showSettings && (
+          <div className="admin-card admin-test-card">
+            <div className="admin-card-title">Settings</div>
+            <div className="admin-test-block">
+              <div className="admin-test-title">Image Defaults</div>
+              <div className="admin-test-grid">
+                <label className="admin-field">
+                  <span>Variations</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={4}
+                    value={imageDefaults.num_images}
+                    onChange={(e) =>
+                      setImageDefaults((prev) => ({
+                        ...prev,
+                        num_images: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="admin-field">
+                  <span>Width</span>
+                  <input
+                    type="number"
+                    value={imageDefaults.width}
+                    onChange={(e) =>
+                      setImageDefaults((prev) => ({
+                        ...prev,
+                        width: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="admin-field">
+                  <span>Height</span>
+                  <input
+                    type="number"
+                    value={imageDefaults.height}
+                    onChange={(e) =>
+                      setImageDefaults((prev) => ({
+                        ...prev,
+                        height: Number(e.target.value),
+                      }))
+                    }
+                  />
+                </label>
+                <label className="admin-field admin-field-path">
+                  <span>Style</span>
+                  <input
+                    type="text"
+                    value={imageDefaults.style}
+                    onChange={(e) =>
+                      setImageDefaults((prev) => ({
+                        ...prev,
+                        style: e.target.value,
+                      }))
+                    }
+                  />
+                </label>
+                <button onClick={() => void saveImageDefaults()}>Save Defaults</button>
+              </div>
+              {imageDefaultsStatus && <div className="admin-status">{imageDefaultsStatus}</div>}
+            </div>
           </div>
         )}
       </div>

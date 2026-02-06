@@ -1,5 +1,6 @@
 import io
 import os
+import re
 from pathlib import Path
 from typing import List, Literal, Optional
 from uuid import UUID
@@ -11,9 +12,11 @@ from pypdf import PdfReader
 from docx import Document
 from supabase import Client, create_client
 
+from local_paths import get_local_project_path, require_local_project_path
+
 EMBEDDING_MODEL = "text-embedding-3-small"
 MAX_TOP_K = 20
-DEFAULT_TOP_K = 10
+DEFAULT_TOP_K = 12
 EMBEDDING_BATCH_SIZE = 50
 VALID_SCOPES = ("generic", "project", "hybrid")
 
@@ -138,9 +141,12 @@ def extract_pdf_text(file_bytes: bytes) -> str:
                 continue
             filtered.append(line)
         if filtered:
-            cleaned_pages.append("\n".join(filtered))
+            paragraph = " ".join(filtered)
+            paragraph = re.sub(r"\s+", " ", paragraph).strip()
+            if paragraph:
+                cleaned_pages.append(paragraph)
 
-    return "\n".join(cleaned_pages).strip()
+    return "\n\n".join(cleaned_pages).strip()
 
 
 def get_supabase_client() -> Client:
@@ -182,21 +188,6 @@ def get_default_project_key_value() -> Optional[str]:
     return get_default_project_key(supabase)
 
 
-def get_project_path(supabase: Client, project_key: str) -> Optional[str]:
-    if not project_key:
-        return None
-    result = (
-        supabase.table("projects")
-        .select("project_path")
-        .eq("project_key", project_key)
-        .limit(1)
-        .execute()
-    )
-    if result.data:
-        return result.data[0].get("project_path")
-    return None
-
-
 def get_project_display_name(supabase: Client, project_key: str) -> Optional[str]:
     if not project_key:
         return None
@@ -213,16 +204,20 @@ def get_project_display_name(supabase: Client, project_key: str) -> Optional[str
 
 
 def resolve_project_path(project_key: Optional[str]) -> Optional[str]:
-    supabase = get_supabase_client()
     cleaned_key = project_key.strip() if project_key else ""
     if cleaned_key:
-        path = get_project_path(supabase, cleaned_key)
+        path = get_local_project_path(cleaned_key)
         if path:
             return path
+    supabase = get_supabase_client()
     default_key = get_default_project_key(supabase)
     if not default_key:
         return None
-    return get_project_path(supabase, default_key)
+    return get_local_project_path(default_key)
+
+
+def require_project_path(project_key: Optional[str]) -> str:
+    return require_local_project_path(project_key)
 
 
 def resolve_scope_and_project_key(scope: str, project_key: Optional[str]) -> tuple[str, Optional[str]]:

@@ -128,6 +128,8 @@ export default function HomePage() {
   const abortRef = useRef<AbortController | null>(null);
   const historySaveTimers = useRef<Record<string, number>>({});
   const [autoScroll, setAutoScroll] = useState(true);
+  const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  const [editingText, setEditingText] = useState("");
   const messages = historyByAgent[agentId] ?? [];
   const activeAgent = AGENTS.find((agent) => agent.id === agentId) ?? AGENTS[0];
 
@@ -231,7 +233,7 @@ export default function HomePage() {
     updateHistory(targetAgent, (prev) => [...prev, userMessage, assistantMessage]);
     setInput("");
     setIsStreaming(true);
-    setStatus("Streaming...");
+    setStatus("Thinking...");
 
     const controller = new AbortController();
     abortRef.current = controller;
@@ -486,10 +488,49 @@ export default function HomePage() {
     }
   };
 
+  const sendMessageWithText = async (text: string) => {
+    const trimmed = text.trim();
+    if (!trimmed || isStreaming) return;
+    setInput(trimmed);
+    await sendMessage();
+  };
+
   const stopStreaming = () => {
     abortRef.current?.abort();
     setIsStreaming(false);
     setStatus(null);
+  };
+
+  const startEdit = (idx: number, text: string) => {
+    if (isStreaming) {
+      stopStreaming();
+    }
+    setEditingIndex(idx);
+    setEditingText(text);
+  };
+
+  const cancelEdit = () => {
+    setEditingIndex(null);
+    setEditingText("");
+  };
+
+  const resubmitEdit = async () => {
+    if (editingIndex === null) return;
+    const trimmed = editingText.trim();
+    if (!trimmed) {
+      setStatus("Error: Message cannot be empty.");
+      return;
+    }
+    const targetAgent = agentId;
+    updateHistory(targetAgent, (prev) => {
+      const next = prev.slice(0, editingIndex + 1);
+      const updated = next[editingIndex];
+      next[editingIndex] = { ...updated, content: trimmed };
+      next.push({ role: "assistant", content: "" });
+      return next;
+    });
+    cancelEdit();
+    await sendMessageWithText(trimmed);
   };
 
   const clearContext = async () => {
@@ -555,7 +596,36 @@ export default function HomePage() {
                 <div className="message" key={idx}>
                   <div className="role">{getRoleLabel(msg.role)}</div>
                   <div className="bubble">
-                    <div>{msg.content}</div>
+                    {editingIndex === idx && msg.role === "user" ? (
+                      <div className="edit-block">
+                        <textarea
+                          value={editingText}
+                          onChange={(e) => setEditingText(e.target.value)}
+                        />
+                        <div className="edit-actions">
+                          <button type="button" onClick={() => void resubmitEdit()}>
+                            Resubmit
+                          </button>
+                          <button type="button" className="admin-link" onClick={cancelEdit}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="message-content">
+                        <div>{msg.content}</div>
+                        {msg.role === "user" && (
+                          <button
+                            type="button"
+                            className="admin-link message-edit"
+                            onClick={() => startEdit(idx, msg.content)}
+                            disabled={isStreaming}
+                          >
+                            Edit
+                          </button>
+                        )}
+                      </div>
+                    )}
                     {msg.role === "assistant" && msg.sourcesUsed && msg.sourcesUsed.length > 0 && (
                       <div className="sources-used">
                         <div className="sources-title">Sources used</div>
@@ -671,9 +741,20 @@ export default function HomePage() {
                 Stop
               </button>
             </div>
-            <div className="status">
-              {status ? status : isStreaming ? "Assistant is typing..." : ""}
-            </div>
+        <div className="status">
+          {isStreaming ? (
+            <span className="thinking">
+              {status || "Thinking"}
+              <span className="dots" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+              </span>
+            </span>
+          ) : (
+            status || ""
+          )}
+        </div>
             <div className="input-row">
               <button type="button" onClick={() => void clearContext()} disabled={isStreaming}>
                 Clear Context

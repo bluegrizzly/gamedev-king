@@ -8,7 +8,7 @@ from reportlab.lib.pagesizes import LETTER
 from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen import canvas
 
-from rag import resolve_project_path
+from rag import require_project_path, resolve_project_path
 
 MAX_FILENAME_LEN = 120
 ALLOWED_FILENAME_RE = re.compile(r"[^a-zA-Z0-9\-_. ]+")
@@ -18,10 +18,10 @@ ALLOWED_DOWNLOAD_RE = re.compile(r"^[a-zA-Z0-9._-]+$")
 def get_doc_output_dir(project_key: Optional[str] = None) -> Path:
     raw = os.getenv("DOC_OUTPUT_DIR")
     if not raw:
-        project_dir = resolve_project_path(project_key)
+        project_dir = require_project_path(project_key) if project_key else resolve_project_path(project_key)
         raw = str(Path(project_dir) / "Documents") if project_dir else "./output"
     elif not Path(raw).is_absolute():
-        project_dir = resolve_project_path(project_key)
+        project_dir = require_project_path(project_key) if project_key else resolve_project_path(project_key)
         if project_dir:
             raw = str(Path(project_dir) / raw)
     output_dir = Path(os.path.expandvars(raw)).expanduser()

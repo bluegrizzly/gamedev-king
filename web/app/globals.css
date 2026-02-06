@@ -88,8 +88,44 @@ main {
 }
 
 .bubble {
+  flex: 1;
+  min-width: 0;
   white-space: pre-wrap;
   line-height: 1.5;
+}
+
+.message-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.message-edit {
+  align-self: flex-start;
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.edit-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.edit-block {
+  width: 100%;
+}
+
+.edit-block textarea {
+  min-height: 160px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .sources-used {
@@ -268,6 +304,46 @@ button:disabled {
 .status {
   font-size: 12px;
   color: #9aa3b2;
+}
+
+.thinking {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dots {
+  display: inline-flex;
+  gap: 4px;
+}
+
+.dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #9aa3b2;
+  opacity: 0.25;
+  animation: dotPulse 1.2s infinite ease-in-out;
+}
+
+.dots span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.dots span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes dotPulse {
+  0%,
+  100% {
+    opacity: 0.25;
+    transform: translateY(0);
+  }
+  50% {
+    opacity: 1;
+    transform: translateY(-2px);
+  }
 }
 
 .agent-list {
@@ -506,6 +582,28 @@ button:disabled {
   align-items: center;
 }
 
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa3b2;
+}
+
+.admin-field-path .admin-path-input {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.admin-path-missing {
+  color: #fca5a5;
+}
+
+.admin-hidden-input {
+  display: none;
+}
+
 .admin-list {
   display: flex;
   flex-direction: column;
@@ -611,6 +709,27 @@ button:disabled {
 
 .admin-test-toggle input {
   accent-color: #3b82f6;
+}
+
+.admin-test-block {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.admin-test-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #9aa3b2;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.admin-test-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
 }
 
 .admin-test-status {
