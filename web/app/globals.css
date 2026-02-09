@@ -639,6 +639,17 @@ button:disabled {
   color: #9aa3b2;
 }
 
+.admin-row-path {
+  margin-top: 4px;
+  font-size: 11px;
+  color: #6b7280;
+  word-break: break-all;
+}
+
+.admin-source-path {
+  font-family: ui-monospace, monospace;
+}
+
 .admin-delete {
   background: #ef4444;
 }

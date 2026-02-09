@@ -76,6 +76,12 @@ const AGENTS: AgentInfo[] = [
     role: "Visuals",
     image: buildAvatar("AD", "#f97316"),
   },
+  {
+    id: "technical_director",
+    name: "Technical Director",
+    role: "Tech & Architecture",
+    image: buildAvatar("TD", "#10b981"),
+  },
 ];
 const API_BASE = "http://localhost:8000";
 

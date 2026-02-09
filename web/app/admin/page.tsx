@@ -39,6 +39,7 @@ const API_BASE = "http://localhost:8000";
 const AGENTS = [
   { id: "creative_director", name: "Creative Director" },
   { id: "art_director", name: "Art Director" },
+  { id: "technical_director", name: "Technical Director" },
 ];
 
 export default function AdminPage() {
@@ -268,10 +269,18 @@ export default function AdminPage() {
     try {
       const response = await fetch(`${API_BASE}/rag/sources/${item.id}/refresh`, {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
       });
+      const text = await response.text();
       if (!response.ok) {
-        const text = await response.text();
-        throw new Error(text || `Update failed: ${response.status}`);
+        let msg = text || `Update failed: ${response.status}`;
+        try {
+          const j = JSON.parse(text) as { detail?: string };
+          if (j.detail) msg = j.detail;
+        } catch {
+          // use msg as-is
+        }
+        throw new Error(msg);
       }
       setStatus("Source updated.");
       await loadSources();
@@ -809,8 +818,15 @@ export default function AdminPage() {
                 if (file && !title.trim()) {
                   setTitle(file.name);
                 }
-                if (file && !sourcePath.trim()) {
-                  setSourcePath(file.name);
+                if (file) {
+                  const project = projects.find((p) => p.project_key === projectKey);
+                  const basePath = scope === "project" && project?.project_path?.trim();
+                  if (basePath) {
+                    const sep = basePath.endsWith("/") || basePath.endsWith("\\") ? "" : "/";
+                    setSourcePath(`${basePath}${sep}${file.name}`);
+                  } else if (!sourcePath.trim()) {
+                    setSourcePath("");
+                  }
                 }
               }}
             />
@@ -843,9 +859,10 @@ export default function AdminPage() {
             </select>
             <input
               type="text"
-              placeholder="Optional source path (server filesystem)"
+              placeholder="Full path on server for Update (e.g. C:\Projects\doc.pdf)"
               value={sourcePath}
               onChange={(e) => setSourcePath(e.target.value)}
+              title="Store the full filesystem path so Update can re-index this file. Required for Update button."
             />
             <div className="admin-agent-select">
               {AGENTS.map((agent) => (
@@ -917,6 +934,15 @@ export default function AdminPage() {
                                     ? ` · ${item.agent_id}`
                                     : ""}
                               </div>
+                              <div className="admin-row-path">
+                                {item.source_path ? (
+                                  <span className="admin-source-path" title={item.source_path}>
+                                    {item.source_path}
+                                  </span>
+                                ) : (
+                                  <span className="admin-path-missing">Path not set</span>
+                                )}
+                              </div>
                             </div>
                             <div className="admin-row-actions">
                               <button
@@ -960,6 +986,15 @@ export default function AdminPage() {
                                   : item.agent_id
                                     ? ` · ${item.agent_id}`
                                     : ""}
+                              </div>
+                              <div className="admin-row-path">
+                                {item.source_path ? (
+                                  <span className="admin-source-path" title={item.source_path}>
+                                    {item.source_path}
+                                  </span>
+                                ) : (
+                                  <span className="admin-path-missing">Path not set</span>
+                                )}
                               </div>
                             </div>
                             <div className="admin-row-actions">
