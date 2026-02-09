@@ -77,6 +77,7 @@ class ChatRequest(BaseModel):
 AGENT_PERSONA_FILES = {
     "creative_director": Path(__file__).parent / "personas" / "creative_director.json",
     "art_director": Path(__file__).parent / "personas" / "art_director.json",
+    "technical_director": Path(__file__).parent / "personas" / "technical_director.json",
 }
 AGENT_HISTORIES: dict[str, List[ChatMessage]] = {}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
