@@ -29,6 +29,17 @@ def get_doc_output_dir(project_key: Optional[str] = None) -> Path:
     return output_dir
 
 
+def get_gen_output_dir(project_key: Optional[str] = None) -> Path:
+    """Output directory for generated files (e.g. spreadsheets from xlsx skill): current project / gen."""
+    project_dir = require_project_path(project_key) if project_key else resolve_project_path(project_key)
+    if project_dir:
+        output_dir = Path(project_dir) / "gen"
+    else:
+        output_dir = Path("./gen").resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
+
+
 def sanitize_filename(value: str) -> str:
     cleaned = value.replace("\\", "_").replace("/", "_").strip()
     cleaned = cleaned.replace("..", "_")

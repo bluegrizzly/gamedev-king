@@ -10,6 +10,7 @@ from openai import OpenAI
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 from docx import Document
+from openpyxl import load_workbook
 from supabase import Client, create_client
 
 from local_paths import get_local_project_path, require_local_project_path
@@ -242,13 +243,38 @@ def extract_docx_text(file_bytes: bytes) -> str:
     return "\n".join(paragraphs).strip()
 
 
+def extract_xlsx_text(file_bytes: bytes) -> str:
+    wb = load_workbook(io.BytesIO(file_bytes), read_only=True, data_only=True)
+    parts = []
+    for sheet in wb.worksheets:
+        rows = []
+        for row in sheet.iter_rows(values_only=True):
+            cells = [str(c).strip() if c is not None else "" for c in (row or [])]
+            if any(cells):
+                rows.append("\t".join(cells))
+        if rows:
+            parts.append("\n".join(rows))
+    wb.close()
+    text = "\n\n".join(parts).strip()
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
+    return re.sub(r"\n{3,}", "\n\n", text).strip()
+
+
 def extract_text_from_file(filename: str, file_bytes: bytes) -> str:
     lower = filename.lower()
     if lower.endswith(".pdf"):
         return extract_pdf_text(file_bytes)
     if lower.endswith(".docx"):
         return extract_docx_text(file_bytes)
+    if lower.endswith(".xlsx"):
+        return extract_xlsx_text(file_bytes)
     raise HTTPException(status_code=400, detail="Unsupported file type.")
+
+
+def _allowed_upload_extensions() -> tuple[str, ...]:
+    return (".pdf", ".docx", ".xlsx")
 
 
 def upload_pdf(
@@ -262,15 +288,18 @@ def upload_pdf(
     if not file.filename:
         raise HTTPException(status_code=400, detail="A file is required.")
     filename_lower = file.filename.lower()
-    is_pdf = filename_lower.endswith(".pdf")
-    is_docx = filename_lower.endswith(".docx")
-    if not (is_pdf or is_docx):
-        raise HTTPException(status_code=400, detail="Only PDF or DOCX files are supported.")
+    allowed = _allowed_upload_extensions()
+    if not any(filename_lower.endswith(ext) for ext in allowed):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Only {', '.join(allowed)} files are supported.",
+        )
     if file.content_type not in (
         None,
         "",
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     ):
         raise HTTPException(status_code=400, detail="Invalid content type.")
 

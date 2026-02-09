@@ -40,6 +40,7 @@ const AGENTS = [
   { id: "creative_director", name: "Creative Director" },
   { id: "art_director", name: "Art Director" },
   { id: "technical_director", name: "Technical Director" },
+  { id: "producer", name: "Producer" },
 ];
 
 export default function AdminPage() {
@@ -206,11 +207,11 @@ export default function AdminPage() {
   const handleUpload = async () => {
     const file = fileRef.current?.files?.[0];
     if (!file) {
-      setStatus("Error: Please select a PDF or DOCX file.");
+      setStatus("Error: Please select a PDF, DOCX, or XLSX file.");
       return;
     }
-    if (!file.name.toLowerCase().match(/\.(pdf|docx)$/)) {
-      setStatus("Error: Only PDF or DOCX files are supported.");
+    if (!file.name.toLowerCase().match(/\.(pdf|docx|xlsx)$/)) {
+      setStatus("Error: Only PDF, DOCX, or XLSX files are supported.");
       return;
     }
     if (scope === "project" && !projectKey.trim()) {
@@ -807,12 +808,12 @@ export default function AdminPage() {
         </div>
 
         <div className="admin-card">
-          <div className="admin-card-title">Upload PDF</div>
+          <div className="admin-card-title">Upload PDF / DOCX / XLSX</div>
           <div className="admin-form">
             <input
               ref={fileRef}
               type="file"
-              accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+              accept=".pdf,.docx,.xlsx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
               onChange={(e) => {
                 const file = e.target.files?.[0];
                 if (file && !title.trim()) {

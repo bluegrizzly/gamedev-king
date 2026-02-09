@@ -14,6 +14,7 @@ from pdf_export import (
     write_pdf,
 )
 from rag import resolve_project_path
+from xlsx_export import get_xlsx_download_path
 
 pdf_router = APIRouter()
 
@@ -103,13 +104,18 @@ def export_docx(body: ExportDocxRequest) -> ExportDocxResponse:
 @pdf_router.get("/downloads/{filename}")
 def download_pdf(filename: str, project_key: Optional[str] = None) -> FileResponse:
     try:
-        safe_name = validate_download_filename(filename)
-        output_path = ensure_output_path(safe_name, project_key)
+        if filename.strip().lower().endswith(".xlsx"):
+            output_path = get_xlsx_download_path(filename, project_key)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            safe_name = output_path.name
+        else:
+            safe_name = validate_download_filename(filename)
+            output_path = ensure_output_path(safe_name, project_key)
+            media_type = "application/pdf"
+            if safe_name.lower().endswith(".docx"):
+                media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         if not output_path.exists():
             raise HTTPException(status_code=404, detail="File not found.")
-        media_type = "application/pdf"
-        if safe_name.lower().endswith(".docx"):
-            media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         return FileResponse(
             output_path,
             media_type=media_type,
@@ -121,7 +127,7 @@ def download_pdf(filename: str, project_key: Optional[str] = None) -> FileRespon
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
         print(f"[download_pdf] failed: {exc}")
-        raise HTTPException(status_code=500, detail="Failed to read PDF.") from exc
+        raise HTTPException(status_code=500, detail="Failed to read file.") from exc
 
 
 @pdf_router.get("/tools/paths")

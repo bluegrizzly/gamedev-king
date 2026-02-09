@@ -25,6 +25,13 @@ type ChatMessage = {
     path?: string;
     error?: string;
   };
+  xlsx?: {
+    status: "saving" | "saved" | "error";
+    filename?: string;
+    downloadUrl?: string;
+    path?: string;
+    error?: string;
+  };
 };
 
 type MessageImage = {
@@ -43,6 +50,7 @@ type SourceUsed = {
 type AgentInfo = {
   id: string;
   name: string;
+  firstName: string;
   role: string;
   image: string;
 };
@@ -67,20 +75,30 @@ const AGENTS: AgentInfo[] = [
   {
     id: "creative_director",
     name: "Creative Director",
+    firstName: "Jean",
     role: "Vision",
     image: buildAvatar("CD", "#3b82f6"),
   },
   {
     id: "art_director",
     name: "Art Director",
+    firstName: "Maya",
     role: "Visuals",
     image: buildAvatar("AD", "#f97316"),
   },
   {
     id: "technical_director",
     name: "Technical Director",
+    firstName: "Alex",
     role: "Tech & Architecture",
     image: buildAvatar("TD", "#10b981"),
+  },
+  {
+    id: "producer",
+    name: "Producer",
+    firstName: "Sam",
+    role: "Tasks & Jira",
+    image: buildAvatar("P", "#8b5cf6"),
   },
 ];
 const API_BASE = "http://localhost:8000";
@@ -229,11 +247,15 @@ export default function HomePage() {
     const wantsDocx =
       /\b(docx|word|google doc|google docs)\b/i.test(trimmed) ||
       (/save/i.test(trimmed) && /(docx|word)/i.test(trimmed));
+    const wantsXlsx =
+      /\b(xlsx|excel|spreadsheet)\b/i.test(trimmed) ||
+      (/save|export|create/i.test(trimmed) && /(xlsx|excel|spreadsheet)/i.test(trimmed));
     const assistantMessage: ChatMessage = {
       role: "assistant",
       content: "",
       pdf: wantsPdf ? { status: "saving" } : undefined,
       docx: wantsDocx ? { status: "saving" } : undefined,
+      xlsx: wantsXlsx ? { status: "saving" } : undefined,
     };
 
     updateHistory(targetAgent, (prev) => [...prev, userMessage, assistantMessage]);
@@ -452,6 +474,49 @@ export default function HomePage() {
               } catch {
                 // Ignore malformed payloads.
               }
+            } else if (evt.event === "xlsx_saved") {
+              try {
+                const payload = JSON.parse(evt.data) as {
+                  filename?: string;
+                  download_url?: string;
+                  path?: string;
+                  error?: string;
+                };
+                updateHistory(targetAgent, (prev) => {
+                  const next = [...prev];
+                  const last = next[next.length - 1];
+                  if (last && last.role === "assistant" && last.xlsx) {
+                    if (payload.error && last.xlsx.status === "saving") {
+                      next[next.length - 1] = {
+                        ...last,
+                        xlsx: {
+                          status: "error",
+                          error: payload.error,
+                        },
+                      };
+                    } else if (payload.filename && last.xlsx.status !== "saved") {
+                      const rawUrl = payload.download_url;
+                      const downloadUrl = rawUrl
+                        ? rawUrl.startsWith("http")
+                          ? rawUrl
+                          : `${API_BASE}${rawUrl.startsWith("/") ? "" : "/"}${rawUrl}`
+                        : `${API_BASE}/downloads/${payload.filename}`;
+                      next[next.length - 1] = {
+                        ...last,
+                        xlsx: {
+                          status: "saved",
+                          filename: payload.filename,
+                          downloadUrl,
+                          path: payload.path,
+                        },
+                      };
+                    }
+                  }
+                  return next;
+                });
+              } catch {
+                // Ignore malformed payloads.
+              }
             } else if (evt.event === "done") {
               done = true;
               break;
@@ -477,6 +542,15 @@ export default function HomePage() {
             docx: {
               status: "error",
               error: "DOCX export did not complete.",
+            },
+          };
+        }
+        if (last && last.role === "assistant" && last.xlsx?.status === "saving") {
+          next[next.length - 1] = {
+            ...last,
+            xlsx: {
+              status: "error",
+              error: "XLSX export did not complete.",
             },
           };
         }
@@ -729,6 +803,35 @@ export default function HomePage() {
                     {msg.role === "assistant" && msg.docx?.status === "error" && (
                       <div className="pdf-status error">DOCX export failed: {msg.docx.error}</div>
                     )}
+                    {msg.role === "assistant" && msg.xlsx?.status === "saving" && (
+                      <div className="pdf-status saving">Saving XLSX...</div>
+                    )}
+                    {msg.role === "assistant" && msg.xlsx?.status === "saved" && (
+                      <div className="pdf-status saved">
+                        <div>XLSX saved: {msg.xlsx.filename}</div>
+                        {msg.xlsx.path && <div>Path: {msg.xlsx.path}</div>}
+                        <div className="pdf-actions">
+                          {msg.xlsx.downloadUrl && (
+                            <>
+                              <a className="pdf-link" href={msg.xlsx.downloadUrl}>
+                                Download
+                              </a>
+                              <a
+                                className="pdf-link"
+                                href={msg.xlsx.downloadUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                              >
+                                Open
+                              </a>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {msg.role === "assistant" && msg.xlsx?.status === "error" && (
+                      <div className="pdf-status error">XLSX export failed: {msg.xlsx.error}</div>
+                    )}
                   </div>
                 </div>
               ))}
@@ -780,6 +883,7 @@ export default function HomePage() {
                 >
                   <img className="agent-avatar" src={agent.image} alt={agent.name} />
                   <div className="agent-meta">
+                    <div className="agent-first-name">{agent.firstName}</div>
                     <div className="agent-name">{agent.name}</div>
                     <div className="agent-role">{agent.role}</div>
                   </div>

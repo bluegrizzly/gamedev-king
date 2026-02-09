@@ -23,8 +23,9 @@ from image_tool import (
     run_generate_image_tool,
     run_resize_image_tool,
 )
-from pdf_export import run_export_pdf_tool
+from pdf_export import get_gen_output_dir, run_export_pdf_tool
 from docx_export import run_export_docx_tool
+from xlsx_export import run_export_xlsx_tool
 from pdf_routes import pdf_router
 from rag import (
     get_default_project_key_value,
@@ -36,6 +37,7 @@ from rag import (
 from projects import projects_router
 from rag_routes import rag_router
 from local_settings import DEFAULT_IMAGE_SETTINGS, load_image_defaults, save_image_defaults
+from skills_loader import build_available_skills_xml, get_skill_content
 
 _env_file = ".env" if sys.platform == "win32" else "env"
 load_dotenv(Path(__file__).parent / _env_file)
@@ -78,6 +80,7 @@ AGENT_PERSONA_FILES = {
     "creative_director": Path(__file__).parent / "personas" / "creative_director.json",
     "art_director": Path(__file__).parent / "personas" / "art_director.json",
     "technical_director": Path(__file__).parent / "personas" / "technical_director.json",
+    "producer": Path(__file__).parent / "personas" / "producer.json",
 }
 AGENT_HISTORIES: dict[str, List[ChatMessage]] = {}
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -118,6 +121,8 @@ def _choose_tool_name(user_message: str) -> Optional[str]:
         return "convert_image"
     if "docx" in lower or "word" in lower:
         return "export_docx"
+    if "xlsx" in lower or "excel" in lower or "spreadsheet" in lower:
+        return "export_xlsx"
     if "pdf" in lower:
         return "export_pdf"
     if "image" in lower or "draw" in lower or "picture" in lower:
@@ -388,10 +393,30 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 "If the user explicitly requests saving or exporting to PDF or DOCX, "
                 "produce the full document first with clear Markdown headings (e.g. '#', '##') and short sections, "
                 "then call export_pdf or export_docx with the final content and a sensible title. "
+                "If the user asks to create, save, or export a spreadsheet (xlsx, Excel), call export_xlsx with title and sheets (list of { name, rows }); rows are arrays of cell values. "
                 "If the user did NOT request saving, do NOT call the tool. "
                 "If the user asks to generate an image, call generate_image. "
-                "If the user asks to resize, crop, or convert an existing image, call the matching tool."
+                "If the user asks to resize, crop, or convert an existing image, call the matching tool. "
+                "When the user's task matches an available skill, call load_skill with that skill's name to get full instructions, then follow them."
             )
+            available_skills_block = build_available_skills_xml()
+            if available_skills_block:
+                tool_instruction = (
+                    tool_instruction + "\n\n"
+                    + available_skills_block + "\n\n"
+                    "Skill descriptions above define when to trigger; call load_skill(skill_name) when the user's task "
+                    "matches a skill's description to get full instructions, then follow them."
+                )
+                if tool_project_key:
+                    try:
+                        gen_dir = get_gen_output_dir(tool_project_key)
+                        tool_instruction = (
+                            tool_instruction + "\n\n"
+                            "Spreadsheet (xlsx) output directory for the current project: "
+                            f"{gen_dir.resolve()}"
+                        )
+                    except Exception:
+                        pass
 
             use_history = body.message is not None and body.message.strip() != ""
             if use_history:
@@ -499,6 +524,9 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                                 elif forced_tool_name == "export_pdf":
                                     result = run_export_pdf_tool(extracted)
                                     yield sse_event("pdf_saved", json.dumps(result))
+                                elif forced_tool_name == "export_xlsx":
+                                    result = run_export_xlsx_tool(extracted)
+                                    yield sse_event("xlsx_saved", json.dumps(result))
                             except Exception as exc:
                                 log_debug_error(
                                     f"[tool_error] {forced_tool_name}",
@@ -518,10 +546,12 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                 allowed_tools = {
                     "export_pdf": "pdf_saved",
                     "export_docx": "docx_saved",
+                    "export_xlsx": "xlsx_saved",
                     "generate_image": "image_generated",
                     "resize_image": "image_updated",
                     "crop_image": "image_updated",
                     "convert_image": "image_updated",
+                    "load_skill": "skill_loaded",
                 }
                 allowed_tool_calls = [
                     call for call in tool_calls if call.get("function", {}).get("name") in allowed_tools
@@ -574,6 +604,10 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                             result = run_export_docx_tool(parsed_args)
                             event_name = "docx_saved"
                             event_payload = result
+                        elif tool_name == "export_xlsx":
+                            result = run_export_xlsx_tool(parsed_args)
+                            event_name = "xlsx_saved"
+                            event_payload = result
                         elif tool_name == "generate_image":
                             result = run_generate_image_tool(parsed_args)
                             event_name = "image_generated"
@@ -590,6 +624,39 @@ async def chat_stream(body: ChatRequest) -> StreamingResponse:
                             result = run_convert_image_tool(parsed_args)
                             event_name = "image_updated"
                             event_payload = {"operation": "convert", "result": result}
+                        elif tool_name == "load_skill":
+                            skill_name = parsed_args.get("skill_name") or ""
+                            content = get_skill_content(skill_name)
+                            result = content if content else {"error": f"Skill not found: {skill_name!r}"}
+                            event_name = "skill_loaded"
+                            event_payload = {"skill_name": skill_name, "loaded": bool(content)}
+                            tool_content = content if content else json.dumps(result)
+                            yield sse_event(event_name, json.dumps(event_payload))
+                            pending_messages.append(
+                                {
+                                    "role": "assistant",
+                                    "content": assistant_text,
+                                    "tool_calls": [
+                                        {
+                                            "id": tool_id,
+                                            "type": "function",
+                                            "function": {
+                                                "name": tool_name or "tool",
+                                                "arguments": raw_args,
+                                            },
+                                        }
+                                    ],
+                                }
+                            )
+                            pending_messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_id,
+                                    "name": tool_name or "tool",
+                                    "content": tool_content,
+                                }
+                            )
+                            continue
                         else:
                             raise ValueError("Unsupported tool.")
                         yield sse_event(event_name, json.dumps(event_payload))

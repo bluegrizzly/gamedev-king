@@ -163,4 +163,66 @@ def get_tools() -> list[dict]:
                 },
             },
         },
+        {
+            "type": "function",
+            "function": {
+                "name": "export_xlsx",
+                "description": (
+                    "Save a spreadsheet workbook to an .xlsx file in the current project's gen folder. "
+                    "Use when the user asks to create, save, or export a spreadsheet (xlsx, Excel). "
+                    "Provide sheets as a list of { name: string, rows: string[][] }."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "title": {"type": "string", "description": "Title of the workbook."},
+                        "sheets": {
+                            "type": "array",
+                            "description": "List of sheets. Each: { name: string, rows: array of array of cell values (string or number) }.",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "name": {"type": "string", "description": "Sheet name."},
+                                    "rows": {
+                                        "type": "array",
+                                        "description": "Rows of cells; each row is an array of values.",
+                                        "items": {"type": "array", "items": {}},
+                                    },
+                                },
+                                "required": ["name", "rows"],
+                            },
+                        },
+                        "filename": {
+                            "type": "string",
+                            "description": "Optional filename (e.g. report.xlsx).",
+                        },
+                        "project_key": {
+                            "type": "string",
+                            "description": "Optional project key; uses current project if omitted.",
+                        },
+                    },
+                    "required": ["title", "sheets"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "load_skill",
+                "description": (
+                    "Load the full instructions for an available skill. "
+                    "Call this when the user's task matches a skill listed in <available_skills> so you can follow that skill's guidelines."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "skill_name": {
+                            "type": "string",
+                            "description": "Name of the skill (e.g. xlsx). Must match a skill from <available_skills>.",
+                        },
+                    },
+                    "required": ["skill_name"],
+                },
+            },
+        },
     ]

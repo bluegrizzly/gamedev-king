@@ -9,3 +9,4 @@ reportlab
 pillow
 requests
 python-docx
+openpyxl
